@@ -9,7 +9,7 @@ cp bin/g15-sync.sh "$HOME/.local/bin/"
 cp bin/g15-watcher.sh "$HOME/.local/bin/"
 chmod +x "$HOME/.local/bin/g15-sync.sh"
 chmod +x "$HOME/.local/bin/g15-watcher.sh"
-echo "-> Scripts installed in ~/.local/bin/ / Scripts instalados em ~/.local/bin/"
+echo "-> Scripts installed / Scripts instalados"
 
 # 2. Setup Systemd Service
 mkdir -p "$HOME/.config/systemd/user/"
@@ -28,12 +28,13 @@ WantedBy=default.target
 EOF
 echo "-> Systemd service created / Serviço Systemd criado"
 
-# 3. Setup Desktop Entry (App Menu)
+# 3. Setup Desktop Entries (App Menu)
 mkdir -p "$HOME/.local/share/applications/"
 sed "s|\$HOME|$HOME|g" desktop/g15-sync-cycle.desktop > "$HOME/.local/share/applications/g15-sync-cycle.desktop"
-echo "-> App Menu shortcut created / Atalho no menu criado"
+sed "s|\$HOME|$HOME|g" desktop/g15-brightness-cycle.desktop > "$HOME/.local/share/applications/g15-brightness-cycle.desktop"
+echo "-> App Menu shortcuts created (Power & Brightness) / Atalhos no menu criados"
 
-# 4. Udev Rules (Optional but recommended)
+# 4. Udev Rules
 echo "--------------------------------------"
 echo "EN: Do you want to install udev rules for non-root hardware access?"
 echo "PT: Deseja instalar as regras udev para acesso ao hardware sem root?"
@@ -53,4 +54,4 @@ systemctl --user restart g15-power-sync.service
 
 echo "--------------------------------------"
 echo "Installation complete! / Instalação completa!"
-echo "The service is running. / O serviço está rodando."
+echo "The shortcuts are now available in your App Menu. / Os atalhos estão no menu."

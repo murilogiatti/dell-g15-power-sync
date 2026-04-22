@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Dell G15 Toggle Brightness
+Name[pt_BR]=Dell G15 Alternar Brilho
+Comment=Switch between 100% and 30% RGB Brightness
+Comment[pt_BR]=Alternar entre 100% e 30% de brilho RGB
+Exec=/home/murilo/.local/bin/g15-sync.sh brightness
+Icon=display-brightness
+Categories=System;Settings;
+Terminal=false
