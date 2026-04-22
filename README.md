@@ -84,7 +84,7 @@ make update
 
 **EN:** You can pin the shortcuts to your Task Manager and use `Super+1` and `Super+2` hotkeys to quickly switch between profiles and brightness, as shown in the example photo:
 
-![Atalhos no Gerenciador de Tarefas](atalhos_gerenciador_tarefas_maior.png)
+![Atalhos no Gerenciador de Tarefas](atalhos_gerenciador_tarefas_media.png)
 
 ---
 
