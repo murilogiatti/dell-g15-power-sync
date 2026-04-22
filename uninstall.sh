@@ -5,13 +5,20 @@ echo "--- Dell G15 Power Sync Uninstaller / Desinstalador ---"
 
 # 1. Stop and Disable Service
 echo "-> Stopping and disabling systemd service / Parando e desativando o serviço systemd..."
+# Tenta parar ambos os nomes (antigo e novo) para garantir limpeza total
+systemctl --user stop dell-g15-daemon.service 2>/dev/null
+systemctl --user disable dell-g15-daemon.service 2>/dev/null
 systemctl --user stop g15-power-sync.service 2>/dev/null
 systemctl --user disable g15-power-sync.service 2>/dev/null
+
+rm -f "$HOME/.config/systemd/user/dell-g15-daemon.service"
 rm -f "$HOME/.config/systemd/user/g15-power-sync.service"
 systemctl --user daemon-reload
 
 # 2. Remove Scripts
 echo "-> Removing scripts / Removendo scripts..."
+rm -f "$HOME/.local/bin/g15-daemon.sh"
+rm -f "$HOME/.local/bin/g15-cycle.sh"
 rm -f "$HOME/.local/bin/g15-sync.sh"
 rm -f "$HOME/.local/bin/g15-watcher.sh"
 rm -f "$HOME/.local/bin/kbd_toggle.sh"
@@ -21,7 +28,11 @@ echo "-> Removing desktop entries / Removendo atalhos do menu..."
 rm -f "$HOME/.local/share/applications/g15-sync-cycle.desktop"
 rm -f "$HOME/.local/share/applications/g15-brightness-cycle.desktop"
 
-# 4. Udev Rules (Optional)
+# 4. Remove temporary state files
+echo "-> Cleaning temporary state files / Limpando arquivos temporários de estado..."
+rm -f /tmp/current_kbd_color /tmp/last_power_profile /tmp/last_applied_color /tmp/dell_g15_daemon.log 2>/dev/null
+
+# 5. Udev Rules (Optional)
 if [ -f "/etc/udev/rules.d/10-alienware.rules" ]; then
     echo "--------------------------------------"
     echo "EN: Do you want to remove the udev rules? (Requires sudo)"
