@@ -13,11 +13,12 @@ Este projeto resolve a falta de integração nativa no Linux para o controle de 
 - **Vermelho (Performance)**: Desempenho máximo (ativação do G-Mode).
 
 ### 🛠️ Detalhes Técnicos e Funcionamento
-A solução foi desenhada para ser leve e resiliente, operando em três frentes:
+A solução opera em quatro frentes técnicas:
 
-1.  **Identificação do Hardware**: O script utiliza o identificador fixo do dispositivo no OpenRGB (ID `1`, correspondente ao *Alienware LED Controller*). O controlador USB do teclado Dell G15 é tecnicamente um hardware Alienware.
-2.  **Sincronização por Polling**: O monitor (`g15-watcher.sh`) verifica o estado do kernel a cada 2 segundos. Esta abordagem é mais estável entre diferentes versões de ambientes gráficos (KDE/GNOME) que sinais DBus.
-3.  **Aritmética Hexadecimal e Brilho**: Realiza cálculos hexadecimais para reduzir a intensidade dos canais R, G e B quando o brilho suave está ativo, mantendo a consistência visual.
+1.  **Identificação do Hardware**: O controlador USB do teclado Dell G15 é identificado pelo OpenRGB como *Alienware LED Controller* (ID `1`).
+2.  **Sincronização por Polling**: O monitor (`g15-watcher.sh`) verifica o estado do kernel a cada 2 segundos, garantindo estabilidade e baixo consumo.
+3.  **Alternância de Brilho (kbd_toggle.sh)**: Como o firmware Dell limita o controle de brilho ACPI no Linux, este script emula dois níveis (100% e 30%) através de cálculos hexadecimais nos canais RGB.
+4.  **Aritmética Hexadecimal**: Realiza o cálculo `(Cor Base * 0.3)` para manter a tonalidade correta mesmo em brilho reduzido.
 
 ### 📋 Requisitos
 - **OpenRGB**: Para comunicação com o hardware.
@@ -28,21 +29,18 @@ A solução foi desenhada para ser leve e resiliente, operando em três frentes:
 ## 🇺🇸 English
 
 ### 🚀 Functionality
-This project provides the missing native integration for Dell G15 power profiles and RGB LEDs on Linux. It syncs the keyboard colors with the system power profiles (`power-profiles-daemon`).
+Syncs RGB keyboard colors with Linux power profiles (`power-profiles-daemon`).
 - **Blue (Power Saver)**: Battery saving mode.
 - **Green (Balanced)**: Everyday balanced use.
-- **Red (Performance)**: Maximum performance (G-Mode activation).
+- **Red (Performance)**: Maximum performance (G-Mode).
 
 ### 🛠️ Technical Details & Operation
-The solution is designed to be lightweight and resilient, operating on three fronts:
+The solution operates on four technical fronts:
 
-1.  **Hardware Identification**: The script uses a fixed device ID in OpenRGB (ID `1`, corresponding to the *Alienware LED Controller*). The Dell G15 keyboard USB controller is technically Alienware hardware.
-2.  **Polling-based Sync**: The monitor (`g15-watcher.sh`) checks the kernel state every 2 seconds. This approach is more stable across different desktop environments (KDE/GNOME) than raw DBus signals.
-3.  **Hex Math & Brightness**: It performs real-time hexadecimal calculations to scale down R, G, and B channels when soft brightness is active, ensuring visual consistency.
-
-### 📋 Requirements
-- **OpenRGB**: For hardware communication.
-- **power-profiles-daemon**: To read the system power state.
+1.  **Hardware Identification**: The Dell G15 keyboard USB controller is detected as *Alienware LED Controller* (ID `1`).
+2.  **Polling-based Sync**: The `g15-watcher.sh` monitor checks kernel state every 2 seconds for stability and low power impact.
+3.  **Brightness Toggle (kbd_toggle.sh)**: Emulates two brightness levels (100% & 30%) by recalculating RGB hex values, bypassing ACPI firmware limitations on Linux.
+4.  **Hex Math**: Performs `(Base Color * 0.3)` calculation to maintain correct hue even at low brightness.
 
 ---
 
@@ -56,7 +54,7 @@ chmod +x install.sh
 ```
 
 ### O que o instalador faz? / What does the installer do?
-- **Scripts**: Copia os binários para `~/.local/bin/`. / Copies binaries to `~/.local/bin/`.
-- **Systemd Service**: Cria um serviço de usuário para início automático. / Creates a user service for autostart.
-- **Udev Rules**: Opcionalmente permite acesso sem sudo. / Optionally allows non-sudo hardware access.
-- **Desktop Entry**: Adiciona um atalho ao menu de apps para ciclar perfis. / Adds an app menu shortcut to cycle profiles.
+- **Scripts**: Copia `g15-sync.sh`, `g15-watcher.sh` e `kbd_toggle.sh` para `~/.local/bin/`.
+- **Systemd Service**: Cria um serviço de usuário para início automático do monitor.
+- **Udev Rules**: Opcionalmente permite acesso ao hardware sem `sudo`.
+- **Desktop Entry**: Adiciona atalhos ao menu de apps para Ciclo de Energia e Alternância de Brilho.

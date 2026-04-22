@@ -7,8 +7,10 @@ echo "--- Dell G15 Power Sync Installer / Instalador ---"
 mkdir -p "$HOME/.local/bin"
 cp bin/g15-sync.sh "$HOME/.local/bin/"
 cp bin/g15-watcher.sh "$HOME/.local/bin/"
+cp bin/kbd_toggle.sh "$HOME/.local/bin/"
 chmod +x "$HOME/.local/bin/g15-sync.sh"
 chmod +x "$HOME/.local/bin/g15-watcher.sh"
+chmod +x "$HOME/.local/bin/kbd_toggle.sh"
 echo "-> Scripts installed / Scripts instalados"
 
 # 2. Setup Systemd Service
