@@ -6,55 +6,79 @@ Automatically synchronizes your keyboard backlight color with the system power p
 
 ## 🇧🇷 Português
 
-### 🚀 Funcionalidade
-Este projeto resolve a falta de integração nativa no Linux para o controle de energia e LEDs do Dell G15. Ele sincroniza as cores do teclado RGB com os perfis de energia do sistema (`power-profiles-daemon`).
+### 🚀 Funcionalidades
+Este projeto sincroniza as cores do teclado RGB com os perfis de energia do sistema (`power-profiles-daemon`).
 - **Azul (Power Saver)**: Modo economia de bateria.
 - **Verde (Balanced)**: Equilíbrio para uso cotidiano.
 - **Vermelho (Performance)**: Desempenho máximo (ativação do G-Mode).
-
-### 🛠️ Detalhes Técnicos e Funcionamento
-A solução opera em quatro frentes técnicas:
-
-1.  **Identificação do Hardware**: O controlador USB do teclado Dell G15 é identificado pelo OpenRGB como *Alienware LED Controller* (ID `1`).
-2.  **Sincronização por Polling**: O monitor (`g15-watcher.sh`) verifica o estado do kernel a cada 2 segundos, garantindo estabilidade e baixo consumo.
-3.  **Alternância de Brilho (kbd_toggle.sh)**: Como o firmware Dell limita o controle de brilho ACPI no Linux, este script emula dois níveis (100% e 30%) através de cálculos hexadecimais nos canais RGB.
-4.  **Aritmética Hexadecimal**: Realiza o cálculo `(Cor Base * 0.3)` para manter a tonalidade correta mesmo em brilho reduzido.
+- **Controle de Brilho**: Alterna entre 100% e 30% via software.
 
 ### 📋 Requisitos
 - **OpenRGB**: Para comunicação com o hardware.
 - **power-profiles-daemon**: Para ler o estado de energia do sistema.
+- **libnotify**: Para notificações de sistema (`notify-send`).
+
+### 📦 Gerenciamento
+
+#### Instalação ou Atualização
+```bash
+make install
+# OU
+./install.sh
+```
+
+#### Desinstalação
+```bash
+make uninstall
+# OU
+./uninstall.sh
+```
+
+#### Atualizar do GitHub e Reinstalar
+```bash
+make update
+```
 
 ---
 
 ## 🇺🇸 English
 
-### 🚀 Functionality
+### 🚀 Features
 Syncs RGB keyboard colors with Linux power profiles (`power-profiles-daemon`).
 - **Blue (Power Saver)**: Battery saving mode.
 - **Green (Balanced)**: Everyday balanced use.
 - **Red (Performance)**: Maximum performance (G-Mode).
+- **Brightness Control**: Toggle between 100% and 30% via software.
 
-### 🛠️ Technical Details & Operation
-The solution operates on four technical fronts:
+### 📋 Requirements
+- **OpenRGB**: For hardware communication.
+- **power-profiles-daemon**: To read system power states.
+- **libnotify**: For system notifications (`notify-send`).
 
-1.  **Hardware Identification**: The Dell G15 keyboard USB controller is detected as *Alienware LED Controller* (ID `1`).
-2.  **Polling-based Sync**: The `g15-watcher.sh` monitor checks kernel state every 2 seconds for stability and low power impact.
-3.  **Brightness Toggle (kbd_toggle.sh)**: Emulates two brightness levels (100% & 30%) by recalculating RGB hex values, bypassing ACPI firmware limitations on Linux.
-4.  **Hex Math**: Performs `(Base Color * 0.3)` calculation to maintain correct hue even at low brightness.
+### 📦 Management
 
----
-
-## 📦 Instalação / Installation
-
+#### Installation or Update
 ```bash
-git clone https://github.com/murilogiatti/dell-g15-power-sync.git
-cd dell-g15-power-sync
-chmod +x install.sh
+make install
+# OR
 ./install.sh
 ```
 
-### O que o instalador faz? / What does the installer do?
-- **Scripts**: Copia `g15-sync.sh`, `g15-watcher.sh` e `kbd_toggle.sh` para `~/.local/bin/`.
-- **Systemd Service**: Cria um serviço de usuário para início automático do monitor.
-- **Udev Rules**: Opcionalmente permite acesso ao hardware sem `sudo`.
-- **Desktop Entry**: Adiciona atalhos ao menu de apps para Ciclo de Energia e Alternância de Brilho.
+#### Uninstallation
+```bash
+make uninstall
+# OR
+./uninstall.sh
+```
+
+#### Update from GitHub and Reinstall
+```bash
+make update
+```
+
+---
+
+### 🛠️ Detalhes Técnicos / Technical Details
+1.  **Hardware**: Identificado como *Alienware LED Controller* (ID `1`).
+2.  **Sync**: `g15-watcher.sh` monitora o kernel a cada 2s.
+3.  **Brightness**: `kbd_toggle.sh` emula níveis de brilho via cálculos hexadecimais (0.3x), contornando limitações de ACPI.
