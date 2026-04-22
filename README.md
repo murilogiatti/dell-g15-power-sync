@@ -78,6 +78,16 @@ make update
 
 ---
 
+## 💡 Dica de Produtividade / Productivity Tip
+
+**PT:** É possível fixar os atalhos no seu Gerenciador de Tarefas e utilizar as teclas de atalho `Super+1` e `Super+2` para alternar rapidamente entre perfis e brilho, como na foto de exemplo:
+
+**EN:** You can pin the shortcuts to your Task Manager and use `Super+1` and `Super+2` hotkeys to quickly switch between profiles and brightness, as shown in the example photo:
+
+![Atalhos no Gerenciador de Tarefas](atalhos_gerenciador_tarefas.png)
+
+---
+
 ### 🛠️ Detalhes Técnicos / Technical Details
 1.  **Hardware**: Identificado como *Alienware LED Controller* (ID `1`).
 2.  **Sync**: `g15-watcher.sh` monitora o kernel a cada 2s.
