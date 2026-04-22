@@ -89,6 +89,13 @@ make update
 ---
 
 ### 🛠️ Detalhes Técnicos / Technical Details
-1.  **Hardware**: Identificado como *Alienware LED Controller* (ID `1`). / Identified as *Alienware LED Controller* (ID `1`).
-2.  **Sync**: `g15-watcher.sh` monitora o kernel a cada 2s. / `g15-watcher.sh` monitors the kernel every 2s.
-3.  **Brightness**: `kbd_toggle.sh` emula níveis de brilho via cálculos hexadecimais (0.3x), contornando limitações de ACPI. / `kbd_toggle.sh` emulates brightness levels via hexadecimal math (0.3x), bypassing ACPI limitations.
+
+1.  **Hardware**:
+    - **PT:** Identificado como *Alienware LED Controller* (ID `1`).
+    - **EN:** Identified as *Alienware LED Controller* (ID `1`).
+2.  **Sync**:
+    - **PT:** `g15-watcher.sh` monitora o kernel a cada 2s.
+    - **EN:** `g15-watcher.sh` monitors the kernel every 2s.
+3.  **Brightness**:
+    - **PT:** `kbd_toggle.sh` emula níveis de brilho via cálculos hexadecimais (0.3x), contornando limitações de ACPI.
+    - **EN:** `kbd_toggle.sh` emulates brightness levels via hexadecimal math (0.3x), bypassing ACPI limitations.
