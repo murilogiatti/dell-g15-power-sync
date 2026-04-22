@@ -1,47 +1,43 @@
 #!/bin/bash
-# Dell G15 Power & LED Sync
-# Compatible with Dell G15 5515 (4-Zone RGB) and similar models
+# Dell G15 Hardware Script - Energy & LED Sync
+# Dynamic logic for G-Mode and Power Profiles
 
-COMMAND="$1"
-COLOR_FILE="/tmp/g15_current_color"
+TARGET="$1"
+COLOR_FILE="/tmp/current_kbd_color"
 STATE_FILE="/tmp/kbd_backlight_state"
 
-# 1. Handle Brightness Toggle
-if [ "$COMMAND" == "brightness" ]; then
-    if [ ! -f "$STATE_FILE" ] || [ "$(cat "$STATE_FILE")" == "1" ]; then
-        echo "0" > "$STATE_FILE"
-        MSG="LED: Suave (30%) / Soft"
-    else
-        echo "1" > "$STATE_FILE"
-        MSG="LED: Forte (100%) / Full"
-    fi
-    # Re-apply current profile with new brightness
-    CURRENT=$(powerprofilesctl get)
-    COMMAND="$CURRENT"
+# Localization
+LANG_CODE=$(echo $LANG | cut -d'_' -f1)
+if [ "$LANG_CODE" == "pt" ]; then
+    MSG_TITLE="Perfil de Energia"
+else
+    MSG_TITLE="Power Profile"
 fi
 
-# 2. Handle Profile Cycle
-if [ -z "$COMMAND" ]; then
-    CURRENT=$(powerprofilesctl get)
+# 1. Cycle logic if no target provided
+if [ -z "$TARGET" ]; then
+    CURRENT=$(/usr/bin/powerprofilesctl get)
     case "$CURRENT" in
         *power-save*) NEXT="balanced" ;;
         *balanced*)    NEXT="performance" ;;
         *)             NEXT="power-saver" ;;
     esac
-    powerprofilesctl set "$NEXT"
-    COMMAND="$NEXT"
+    /usr/bin/powerprofilesctl set "$NEXT"
+    TARGET="$NEXT"
 fi
 
-# 3. Map Colors
-case "$COMMAND" in
-    *performance*) COLOR="FF0000" ; MSG_P="Performance" ;;
-    *balanced*)    COLOR="00FF00" ; MSG_P="Balanced" ;;
-    *)             COLOR="0000FF" ; MSG_P="Power Saver" ;;
-esac
+# 2. Get actual profile
+ACTUAL=$(/usr/bin/powerprofilesctl get | tr -d ' ')
 
+# 3. Define color based on profile
+case "$ACTUAL" in
+    *performance*) COLOR="FF0000" ;;
+    *balanced*)    COLOR="00FF00" ;;
+    *)             COLOR="0000FF" ;;
+esac
 echo "$COLOR" > "$COLOR_FILE"
 
-# 4. Apply Soft Brightness if requested
+# 4. Soft Brightness Logic
 FINAL_COLOR="$COLOR"
 if [ -f "$STATE_FILE" ] && [ "$(cat "$STATE_FILE")" == "0" ]; then
     R=$(printf "%02X" $(( (16#${COLOR:0:2} * 30) / 100 )))
@@ -50,10 +46,24 @@ if [ -f "$STATE_FILE" ] && [ "$(cat "$STATE_FILE")" == "0" ]; then
     FINAL_COLOR="${R}${G}${B}"
 fi
 
-# 5. Apply to hardware (ID 1 is standard for Dell G15)
+# 5. Apply to hardware
 /usr/bin/openrgb --noautoconnect -d 1 -c "$FINAL_COLOR" -m Static > /dev/null 2>&1
 
-# Notify user only on manual cycle (command was empty or 'brightness')
-if [ -z "$1" ] || [ "$1" == "brightness" ]; then
-    notify-send -r 9999 "G15 Hardware" "${MSG_P:-$MSG}" -i preferences-system-power-management
+# 6. G-Mode & Notifications
+GMODE_STATUS=""
+if [[ "$ACTUAL" == *"performance"* ]]; then
+    # Check if G-Mode is active via platform_profile
+    if grep -q "performance" /sys/firmware/acpi/platform_profile 2>/dev/null || \
+       grep -q "performance" /sys/devices/platform/alienware-wmi/platform_profile 2>/dev/null || \
+       grep -q "performance" /sys/class/hwmon/hwmon*/device/platform-profile 2>/dev/null; then
+        
+        MAX_FAN=$(sensors 2>/dev/null | grep -i "RPM" | awk '{print $3}' | sort -nr | head -n 1)
+        GMODE_STATUS=" (G-Mode ON 🚀 ${MAX_FAN} RPM)"
+    else
+        GMODE_STATUS=" (G-Mode OFF)"
+    fi
 fi
+
+# Notification
+USER_ID=$(id -u)
+DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$USER_ID/bus" notify-send -a "Dell G15 System" "$MSG_TITLE" "${ACTUAL^}${GMODE_STATUS}"
