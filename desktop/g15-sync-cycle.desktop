@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Dell G15 Cycle Power
+Comment=Cycle between Power Profiles and RGB Colors
+Exec=/home/murilo/.local/bin/g15-sync.sh
+Icon=preferences-system-power-management
+Categories=System;Settings;
+Terminal=false

@@ -26,7 +26,11 @@ RestartSec=3
 WantedBy=default.target
 EOF
 
-# 3. Udev Rules (Optional but recommended)
+# 3. Setup Desktop Entry (App Menu)
+mkdir -p "$HOME/.local/share/applications/"
+sed "s|\$HOME|$HOME|g" desktop/g15-sync-cycle.desktop > "$HOME/.local/share/applications/g15-sync-cycle.desktop"
+
+# 4. Udev Rules (Optional but recommended)
 read -p "Do you want to install udev rules for non-root hardware access? (y/n) " -n 1 -r
 echo
 if [[ $REPLY =~ ^[Yy]$ ]]; then
@@ -36,7 +40,7 @@ if [[ $REPLY =~ ^[Yy]$ ]]; then
     echo "Udev rules installed."
 fi
 
-# 4. Reload and Start
+# 5. Reload and Start
 systemctl --user daemon-reload
 systemctl --user enable g15-power-sync.service
 systemctl --user restart g15-power-sync.service
@@ -44,3 +48,4 @@ systemctl --user restart g15-power-sync.service
 echo "--------------------------------------"
 echo "Installation complete!"
 echo "The service is running and will start automatically on login."
+echo "The 'Dell G15 Cycle Power' shortcut is now available in your App Menu."
