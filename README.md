@@ -1,74 +1,82 @@
 # Dell G15 Power & LED Sync (Linux)
 
-Automatically synchronizes your keyboard backlight color with the system power profile on Dell G15 laptops. Optimized for **Dell G15** series (5510, 5511, 5515, 5520+) with 4-Zone RGB keyboards.
+Automatically synchronizes your keyboard backlight color with the system power profile and screen brightness on Dell G15 laptops. Optimized for **Dell G15** series (5510, 5511, 5515, 5520+) with 4-Zone RGB keyboards.
 
 ---
 
 ## 🇧🇷 Português
 
 ### 🚀 Funcionalidades
-- **Sincronização de Cor**: Altera o RGB baseado no perfil (`power-profiles-daemon`).
-- **Detecção de G-Mode**: Identifica se o Game Mode está ativo no hardware via driver `alienware-wmi`.
-- **Monitor de Fans**: Exibe a rotação (RPM) das ventoinhas nas notificações de Performance.
-- **Bilingue**: Notificações automáticas em PT-BR ou EN baseado no sistema.
-- **Controle de Brilho Dinâmico**: Sincronização automática com o brilho da tela em 3 níveis (30%, 70%, 100%) via Daemon.
-- **Sincronização Integrada**: Um único Daemon gerencia cores, perfis e brilho de forma estável.
+- **Sincronização de Cor**: Altera o RGB baseado no perfil ativo (`performance`, `balanced`, `power-saver`).
+- **Brilho Dinâmico Inteligente**: Sincroniza o brilho do teclado com a tela em 3 níveis automáticos.
+- **Detecção de G-Mode**: Identifica se o Game Mode está ativo via hardware.
+- **Monitor de Fans**: Exibe a rotação (RPM) das ventoinhas nas notificações.
+- **Daemon Integrado**: Um único serviço gerencia tudo de forma estável e sem conflitos.
 
-### 📋 Requisitos
-- **OpenRGB**: Para controle do hardware.
-- **brightnessctl**: Para leitura do brilho da tela (necessário para o Daemon).
-- **alienware-wmi**: Driver do kernel para G-Mode (nativo em distros modernas).
-- **lm_sensors**: Para leitura das ventoinhas (`sensors`).
-- **libnotify**: Para notificações (`notify-send`).
+### 📊 Lógica de Funcionamento
+
+| Componente | Regra / Comportamento |
+| :--- | :--- |
+| **Perfil Performance** | LED **Vermelho** (`FF0000`) |
+| **Perfil Balanced** | LED **Verde** (`00FF00`) |
+| **Perfil Power Saver** | LED **Azul** (`0000FF`) |
+| **Brilho da Tela 0-30%** | Teclado em **30%** (Garante visibilidade) |
+| **Brilho da Tela 31-70%** | Teclado em **70%** |
+| **Brilho da Tela 71-100%** | Teclado em **100%** |
+
+### 🛠️ Gerenciamento (Systemd)
+O sistema roda como um serviço de usuário. Comandos úteis:
+```bash
+systemctl --user status dell-g15-daemon.service  # Ver status
+systemctl --user restart dell-g15-daemon.service # Reiniciar
+systemctl --user stop dell-g15-daemon.service    # Parar
+journalctl --user -u dell-g15-daemon.service -f  # Ver logs em tempo real
+```
 
 ---
 
 ## 🇺🇸 English
 
 ### 🚀 Features
-- **Color Sync**: Changes RGB based on profile (`power-profiles-daemon`).
-- **G-Mode Detection**: Identifies if Game Mode is active via `alienware-wmi` driver.
-- **Fan Monitor**: Displays fan speed (RPM) in Performance notifications.
-- **Bilingual**: Automatic PT-BR or EN notifications based on system locale.
-- **Dynamic Brightness Control**: Automatic 3-level sync (30%, 70%, 100%) with screen brightness via Daemon.
-- **Integrated Sync**: A single Daemon manages colors, profiles, and brightness stably.
+- **Color Sync**: Changes RGB based on active profile (`performance`, `balanced`, `power-saver`).
+- **Smart Dynamic Brightness**: Syncs keyboard backlight with screen in 3 automatic levels.
+- **G-Mode Detection**: Identifies if Game Mode is active via hardware.
+- **Fan Monitor**: Displays fan speed (RPM) in notifications.
+- **Integrated Daemon**: A single service manages everything stably without conflicts.
 
-### 📋 Requirements
-- **OpenRGB**: For hardware control.
-- **brightnessctl**: For reading screen brightness (required for the Daemon).
-- **alienware-wmi**: Kernel driver for G-Mode (native in modern distros).
-- **lm_sensors**: For fan speed reading (`sensors`).
-- **libnotify**: For notifications (`notify-send`).
+### 📊 System Logic
+
+| Component | Rule / Behavior |
+| :--- | :--- |
+| **Performance Profile** | **Red** LED (`FF0000`) |
+| **Balanced Profile** | **Green** LED (`00FF00`) |
+| **Power Saver Profile** | **Blue** LED (`0000FF`) |
+| **Screen Brightness 0-30%** | Keyboard at **30%** (Ensures visibility) |
+| **Screen Brightness 31-70%** | Keyboard at **70%** |
+| **Screen Brightness 71-100%** | Keyboard at **100%** |
+
+### 🛠️ Management (Systemd)
+The system runs as a user service. Useful commands:
+```bash
+systemctl --user status dell-g15-daemon.service  # Check status
+systemctl --user restart dell-g15-daemon.service # Restart
+systemctl --user stop dell-g15-daemon.service    # Stop
+journalctl --user -u dell-g15-daemon.service -f  # Real-time logs
+```
 
 ---
 
-## 📦 Gerenciamento / Management
+## 📋 Requisitos / Requirements
+- **OpenRGB**: Hardware control.
+- **brightnessctl**: Screen brightness reading.
+- **power-profiles-daemon**: Power profile management.
+- **lm_sensors**: Fan speed reading (`sensors`).
 
+## 📦 Instalação / Installation
 ```bash
 make install    # Instalar ou Atualizar / Install or Update
 make uninstall  # Remover / Remove
 ```
 
 ---
-
-## 💡 Dica de Produtividade / Productivity Tip
-
-**PT:** É possível fixar os atalhos no seu Gerenciador de Tarefas e utilizar as teclas de atalho `Super+1` e `Super+2` para alternar rapidamente entre perfis e brilho, como na foto de exemplo:
-
-**EN:** You can pin the shortcuts to your Task Manager and use `Super+1` and `Super+2` hotkeys to quickly switch between profiles and brightness, as shown in the example photo:
-
-![Atalhos no Gerenciador de Tarefas](atalhos_gerenciador_tarefas_media.png)
-
----
-
-### 🛠️ Detalhes Técnicos / Technical Details
-
-1.  **G-Mode**:
-    - **PT:** Detectado via `platform_profile` do ACPI ou Alienware WMI.
-    - **EN:** Detected via ACPI or Alienware WMI `platform_profile`.
-2.  **Performance Notification**:
-    - **PT:** Exibe "G-Mode ON" e a maior RPM atual se o modo turbo estiver ativo.
-    - **EN:** Displays "G-Mode ON" and the current max RPM if turbo mode is active.
-3.  **Brightness**:
-    - **PT:** Emula níveis de brilho via cálculos hexadecimais (0.3x), contornando limitações de ACPI.
-    - **EN:** Emulates brightness levels via hexadecimal math (0.3x), bypassing ACPI limitations.
+*Configured with hardware stability in mind: 2s polling interval and flicker-free logic.*
