@@ -73,9 +73,31 @@ journalctl --user -u dell-g15-daemon.service -f  # Real-time logs
 - **lm_sensors**: Fan speed reading (`sensors`).
 
 ## 📦 Instalação / Installation
+
+**PT: Opção 1 (Via Makefile):**
 ```bash
-make install    # Instalar ou Atualizar / Install or Update
-make uninstall  # Remover / Remove
+make install    # Instalar ou Atualizar
+make uninstall  # Remover
+```
+
+**PT: Opção 2 (Script Direto):**
+```bash
+chmod +x install.sh
+./install.sh
+```
+
+---
+
+**EN: Option 1 (Via Makefile):**
+```bash
+make install    # Install or Update
+make uninstall  # Remove
+```
+
+**EN: Option 2 (Direct Script):**
+```bash
+chmod +x install.sh
+./install.sh
 ```
 
 ---
