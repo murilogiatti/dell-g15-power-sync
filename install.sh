@@ -5,7 +5,7 @@ echo "--- Dell G15 Power Sync Installer / Instalador ---"
 
 # 0. Check Dependencies
 echo "-> Checking dependencies / Verificando dependências..."
-for cmd in openrgb powerprofilesctl notify-send; do
+for cmd in openrgb powerprofilesctl notify-send brightnessctl; do
     if ! command -v $cmd &> /dev/null; then
         echo "EN: Error: $cmd is not installed."
         echo "PT: Erro: $cmd não está instalado."
@@ -14,30 +14,30 @@ for cmd in openrgb powerprofilesctl notify-send; do
 done
 
 # 1. Stop existing service if running
-if systemctl --user is-active --quiet g15-power-sync.service; then
+if systemctl --user is-active --quiet dell-g15-daemon.service; then
     echo "-> Stopping existing service for update / Parando serviço existente para atualização..."
-    systemctl --user stop g15-power-sync.service
+    systemctl --user stop dell-g15-daemon.service
 fi
 
 # 2. Install Scripts
 mkdir -p "$HOME/.local/bin"
-cp bin/g15-sync.sh "$HOME/.local/bin/"
-cp bin/g15-watcher.sh "$HOME/.local/bin/"
+cp bin/g15-daemon.sh "$HOME/.local/bin/"
+cp bin/g15-cycle.sh "$HOME/.local/bin/"
 cp bin/kbd_toggle.sh "$HOME/.local/bin/"
-chmod +x "$HOME/.local/bin/g15-sync.sh"
-chmod +x "$HOME/.local/bin/g15-watcher.sh"
+chmod +x "$HOME/.local/bin/g15-daemon.sh"
+chmod +x "$HOME/.local/bin/g15-cycle.sh"
 chmod +x "$HOME/.local/bin/kbd_toggle.sh"
 echo "-> Scripts installed / Scripts instalados"
 
 # 3. Setup Systemd Service
 mkdir -p "$HOME/.config/systemd/user/"
-cat <<EOF > "$HOME/.config/systemd/user/g15-power-sync.service"
+cat <<EOF > "$HOME/.config/systemd/user/dell-g15-daemon.service"
 [Unit]
 Description=Dell G15 Power & LED Sync
 After=graphical-session.target
 
 [Service]
-ExecStart=$HOME/.local/bin/g15-watcher.sh
+ExecStart=$HOME/.local/bin/g15-daemon.sh
 Restart=always
 RestartSec=3
 
@@ -71,8 +71,8 @@ fi
 
 # 6. Reload and Start
 systemctl --user daemon-reload
-systemctl --user enable g15-power-sync.service
-systemctl --user restart g15-power-sync.service
+systemctl --user enable dell-g15-daemon.service
+systemctl --user restart dell-g15-daemon.service
 
 echo "--------------------------------------"
 echo "Installation/Update complete! / Instalação/Atualização completa!"

@@ -11,10 +11,12 @@ Automatically synchronizes your keyboard backlight color with the system power p
 - **Detecção de G-Mode**: Identifica se o Game Mode está ativo no hardware via driver `alienware-wmi`.
 - **Monitor de Fans**: Exibe a rotação (RPM) das ventoinhas nas notificações de Performance.
 - **Bilingue**: Notificações automáticas em PT-BR ou EN baseado no sistema.
-- **Controle de Brilho**: Alterna entre 100% e 30% (suave) via software.
+- **Controle de Brilho Dinâmico**: Sincronização automática com o brilho da tela em 3 níveis (30%, 70%, 100%) via Daemon.
+- **Sincronização Integrada**: Um único Daemon gerencia cores, perfis e brilho de forma estável.
 
 ### 📋 Requisitos
 - **OpenRGB**: Para controle do hardware.
+- **brightnessctl**: Para leitura do brilho da tela (necessário para o Daemon).
 - **alienware-wmi**: Driver do kernel para G-Mode (nativo em distros modernas).
 - **lm_sensors**: Para leitura das ventoinhas (`sensors`).
 - **libnotify**: Para notificações (`notify-send`).
@@ -28,10 +30,12 @@ Automatically synchronizes your keyboard backlight color with the system power p
 - **G-Mode Detection**: Identifies if Game Mode is active via `alienware-wmi` driver.
 - **Fan Monitor**: Displays fan speed (RPM) in Performance notifications.
 - **Bilingual**: Automatic PT-BR or EN notifications based on system locale.
-- **Brightness Control**: Software-based toggle between 100% and 30% (soft).
+- **Dynamic Brightness Control**: Automatic 3-level sync (30%, 70%, 100%) with screen brightness via Daemon.
+- **Integrated Sync**: A single Daemon manages colors, profiles, and brightness stably.
 
 ### 📋 Requirements
 - **OpenRGB**: For hardware control.
+- **brightnessctl**: For reading screen brightness (required for the Daemon).
 - **alienware-wmi**: Kernel driver for G-Mode (native in modern distros).
 - **lm_sensors**: For fan speed reading (`sensors`).
 - **libnotify**: For notifications (`notify-send`).
