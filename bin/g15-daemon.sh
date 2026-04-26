@@ -1,86 +1,86 @@
 #!/bin/bash
-# dell_g15_daemon.sh (Versão Sensível e Estável)
-# Centraliza: Cores por Perfil + 3 Níveis de Brilho + G-Mode.
+# Dell G15 Power & LED Sync Daemon - Refactored for Ubuntu 26.04
+# Lightweight version: No external brightness dependencies.
 
-DEVICE_NAME="Dell G Series LED Controller"
+# Configuration
 POLL_INTERVAL=2
-COLOR_FILE="/tmp/current_kbd_color"
-LAST_PROFILE_FILE="/tmp/last_power_profile"
-LAST_APPLIED_COLOR_FILE="/tmp/last_applied_color"
-LOG_FILE="/tmp/dell_g15_daemon.log"
+DEVICE_NAME="Dell G Series LED Controller"
+BACKLIGHT_PATH="/sys/class/backlight/amdgpu_bl2"
 
-log_event() {
-    echo "$(date '+%H:%M:%S') - $1" >> "$LOG_FILE"
-}
+# Localization
+LANG_CODE=$(echo $LANG | cut -d'_' -f1)
+if [ "$LANG_CODE" == "pt" ]; then
+    MSG_TITLE="Dell G15"
+    MSG_PROFILE="Perfil"
+    MSG_SYNCED="LEDs sincronizados"
+    COLOR_RED="Vermelho"
+    COLOR_GREEN="Verde"
+    COLOR_BLUE="Azul"
+else
+    MSG_TITLE="Dell G15"
+    MSG_PROFILE="Profile"
+    MSG_SYNCED="LEDs synced"
+    COLOR_RED="Red"
+    COLOR_GREEN="Green"
+    COLOR_BLUE="Blue"
+fi
 
-apply_led() {
-    local profile=$1
-    local screen_perc=$2
-    
-    # 1. Definir Cor Base
-    local base_color="00FF00"
-    case "$profile" in
-        *performance*) base_color="FF0000" ;;
-        *balanced*)    base_color="00FF00" ;;
-        *save*)        base_color="0000FF" ;;
-        *)             base_color="0000FF" ;;
-    esac
-    echo "$base_color" > "$COLOR_FILE"
+# State tracking
+LAST_STATE=""
+LAST_PROFILE=""
 
-    # 2. Definir Nível conforme suas 3 faixas
-    local k_level=100
-    if [ "$screen_perc" -le 30 ]; then
-        k_level=30
-    elif [ "$screen_perc" -le 70 ]; then
-        k_level=70
+get_screen_brightness_perc() {
+    if [ -d "$BACKLIGHT_PATH" ]; then
+        local curr=$(cat "$BACKLIGHT_PATH/brightness")
+        local max=$(cat "$BACKLIGHT_PATH/max_brightness")
+        echo $(( (curr * 100) / max ))
     else
-        k_level=100
-    fi
-
-    # 3. Cálculo RGB
-    local r g b final_color
-    r=$(printf "%02X" $(( (16#${base_color:0:2} * k_level) / 100 )))
-    g=$(printf "%02X" $(( (16#${base_color:2:2} * k_level) / 100 )))
-    b=$(printf "%02X" $(( (16#${base_color:4:2} * k_level) / 100 )))
-    final_color="${r}${g}${b}"
-
-    # 4. Trava de Mudança
-    local last_color=""
-    [ -f "$LAST_APPLIED_COLOR_FILE" ] && last_color=$(cat "$LAST_APPLIED_COLOR_FILE")
-
-    if [ "$final_color" != "$last_color" ]; then
-        log_event "AÇÃO: Tela=$screen_perc%, Perfil=$profile -> Aplicando $final_color ($k_level%)"
-        openrgb --noautoconnect -d "$DEVICE_NAME" -c "$final_color" -m Static > /dev/null 2>&1
-        echo "$final_color" > "$LAST_APPLIED_COLOR_FILE"
+        echo 100
     fi
 }
 
-# --- INÍCIO ---
-echo "Master Daemon v3 Iniciado."
-echo "" > "$LOG_FILE"
-rm "$LAST_APPLIED_COLOR_FILE" 2>/dev/null
-
-while true; do
-    # Captura porcentagem exata da tela
-    CUR_P=$(powerprofilesctl get | tr -d ' ')
-    LAST_P=$(cat "$LAST_PROFILE_FILE" 2>/dev/null)
+apply_settings() {
+    local profile=$(powerprofilesctl get)
+    local brightness=$(get_screen_brightness_perc)
     
-    # Método mais sensível para pegar a porcentagem
-    PERC_B=$(brightnessctl -m | awk -F, '{print $4}' | tr -d '%')
-
-    # Se a captura falhar por algum motivo, usa o cálculo manual
-    if [ -z "$PERC_B" ]; then
-        CUR_B=$(brightnessctl g)
-        MAX_B=$(brightnessctl m)
-        PERC_B=$(( (CUR_B * 100) / MAX_B ))
+    # Define Base Color
+    local color="0000FF" # Default Blue (Power Save)
+    [[ "$profile" == *"performance"* ]] && color="FF0000"
+    [[ "$profile" == *"balanced"* ]] && color="00FF00"
+    
+    # Define Brightness Zone (0-30, 31-70, 71-100)
+    local zone=100
+    if [ "$brightness" -le 30 ]; then zone=30;
+    elif [ "$brightness" -le 70 ]; then zone=70;
     fi
 
-    apply_led "$CUR_P" "$PERC_B"
-
-    if [ "$CUR_P" != "$LAST_P" ]; then
-        echo "$CUR_P" > "$LAST_PROFILE_FILE"
-        notify-send -t 2000 -a "Dell G15" "Perfil: ${CUR_P^}" "Modo dinâmico ativo." &
+    # Check if anything changed
+    local state_id="${profile}_${zone}"
+    if [ "$state_id" != "$LAST_STATE" ]; then
+        # Calculate dimmed RGB
+        local r=$(printf "%02X" $(( (16#${color:0:2} * zone) / 100 )))
+        local g=$(printf "%02X" $(( (16#${color:2:2} * zone) / 100 )))
+        local b=$(printf "%02X" $(( (16#${color:4:2} * zone) / 100 )))
+        local final_color="${r}${g}${b}"
+        
+        openrgb --noautoconnect -d "$DEVICE_NAME" -c "$final_color" -m Static > /dev/null 2>&1
+        
+        # Define Color Name for Notification
+        local color_name="$COLOR_BLUE"
+        [[ "$color" == "FF0000" ]] && color_name="$COLOR_RED"
+        [[ "$color" == "00FF00" ]] && color_name="$COLOR_GREEN"
+        
+        # Notify profile change
+        if [ "$profile" != "$LAST_PROFILE" ]; then
+            notify-send -t 1500 -a "$MSG_TITLE" "${MSG_PROFILE}: ${profile^}" "${MSG_SYNCED}: ${color_name}"
+            LAST_PROFILE="$profile"
+        fi
+        LAST_STATE="$state_id"
     fi
+}
 
+echo "Dell G15 Daemon Started (v4 Simplified)"
+while true; do
+    apply_settings
     sleep "$POLL_INTERVAL"
 done

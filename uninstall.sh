@@ -1,51 +1,25 @@
 #!/bin/bash
-# Uninstaller for Dell G15 Power Sync (Bilingual)
+# Uninstaller for Dell G15 Power Sync
 
-echo "--- Dell G15 Power Sync Uninstaller / Desinstalador ---"
+echo "--- Dell G15 Power Sync Uninstaller ---"
 
 # 1. Stop and Disable Service
-echo "-> Stopping and disabling systemd service / Parando e desativando o serviço systemd..."
-# Tenta parar ambos os nomes (antigo e novo) para garantir limpeza total
+echo "-> Stopping and disabling systemd service..."
 systemctl --user stop dell-g15-daemon.service 2>/dev/null
 systemctl --user disable dell-g15-daemon.service 2>/dev/null
-systemctl --user stop g15-power-sync.service 2>/dev/null
-systemctl --user disable g15-power-sync.service 2>/dev/null
-
-rm -f "$HOME/.config/systemd/user/dell-g15-daemon.service"
-rm -f "$HOME/.config/systemd/user/g15-power-sync.service"
+rm "$HOME/.config/systemd/user/dell-g15-daemon.service" 2>/dev/null
 systemctl --user daemon-reload
 
 # 2. Remove Scripts
-echo "-> Removing scripts / Removendo scripts..."
-rm -f "$HOME/.local/bin/g15-daemon.sh"
-rm -f "$HOME/.local/bin/g15-cycle.sh"
-rm -f "$HOME/.local/bin/g15-sync.sh"
-rm -f "$HOME/.local/bin/g15-watcher.sh"
-rm -f "$HOME/.local/bin/kbd_toggle.sh"
+echo "-> Removing scripts from ~/.local/bin/..."
+rm "$HOME/.local/bin/g15-daemon.sh" 2>/dev/null
+rm "$HOME/.local/bin/g15-cycle.sh" 2>/dev/null
 
-# 3. Remove Desktop Entries
-echo "-> Removing desktop entries / Removendo atalhos do menu..."
-rm -f "$HOME/.local/share/applications/g15-sync-cycle.desktop"
-rm -f "$HOME/.local/share/applications/g15-brightness-cycle.desktop"
-
-# 4. Remove temporary state files
-echo "-> Cleaning temporary state files / Limpando arquivos temporários de estado..."
-rm -f /tmp/current_kbd_color /tmp/last_power_profile /tmp/last_applied_color /tmp/dell_g15_daemon.log 2>/dev/null
-
-# 5. Udev Rules (Optional)
+# 3. Udev Rules (Optional)
 if [ -f "/etc/udev/rules.d/10-alienware.rules" ]; then
-    echo "--------------------------------------"
-    echo "EN: Do you want to remove the udev rules? (Requires sudo)"
-    echo "PT: Deseja remover as regras udev? (Requer sudo)"
-    read -p "(y/n) / (s/n): " -n 1 -r
-    echo
-    if [[ $REPLY =~ ^[YySs]$ ]]; then
-        sudo rm -f /etc/udev/rules.d/10-alienware.rules
-        sudo udevadm control --reload-rules
-        sudo udevadm trigger
-        echo "-> Udev rules removed / Regras udev removidas"
-    fi
+    echo "-> Note: Udev rules at /etc/udev/rules.d/10-alienware.rules were kept for safety."
+    echo "   You can remove them manually with: sudo rm /etc/udev/rules.d/10-alienware.rules"
 fi
 
 echo "--------------------------------------"
-echo "Uninstallation complete! / Desinstalação completa!"
+echo "Uninstallation complete!"

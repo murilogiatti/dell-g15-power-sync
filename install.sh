@@ -1,21 +1,42 @@
 #!/bin/bash
-# Installer for Dell G15 Power Sync (Bilingual)
+# Installer for Dell G15 Power Sync (Refactored for Ubuntu 26.04)
 
-echo "--- Dell G15 Power Sync Installer / Instalador ---"
+# Localization
+LANG_CODE=$(echo $LANG | cut -d'_' -f1)
+if [ "$LANG_CODE" == "pt" ]; then
+    MSG_START="--- Dell G15 Power Sync Instalador ---"
+    MSG_CHECK="-> Verificando dependências..."
+    MSG_ERROR="Erro: %s não está instalado. Por favor, instale-o primeiro."
+    MSG_STOP="-> Parando serviço existente..."
+    MSG_SCRIPTS="-> Scripts instalados em ~/.local/bin/"
+    MSG_SERVICE="-> Serviço Systemd criado"
+    MSG_UDEV="-> Instalando regras udev (requer sudo)..."
+    MSG_DONE="--------------------------------------\nInstalação completa! O daemon está rodando.\nVocê pode usar 'g15-cycle.sh' para alternar perfis."
+else
+    MSG_START="--- Dell G15 Power Sync Installer ---"
+    MSG_CHECK="-> Checking dependencies..."
+    MSG_ERROR="Error: %s is not installed. Please install it first."
+    MSG_STOP="-> Stopping existing service..."
+    MSG_SCRIPTS="-> Scripts installed in ~/.local/bin/"
+    MSG_SERVICE="-> Systemd service created"
+    MSG_UDEV="-> Installing udev rules (requires sudo)..."
+    MSG_DONE="--------------------------------------\nInstallation complete! The daemon is now running.\nYou can use 'g15-cycle.sh' to change profiles."
+fi
+
+echo -e "$MSG_START"
 
 # 0. Check Dependencies
-echo "-> Checking dependencies / Verificando dependências..."
-for cmd in openrgb powerprofilesctl notify-send brightnessctl; do
+echo "$MSG_CHECK"
+for cmd in openrgb powerprofilesctl notify-send; do
     if ! command -v $cmd &> /dev/null; then
-        echo "EN: Error: $cmd is not installed."
-        echo "PT: Erro: $cmd não está instalado."
+        printf "$MSG_ERROR\n" "$cmd"
         exit 1
     fi
 done
 
 # 1. Stop existing service if running
 if systemctl --user is-active --quiet dell-g15-daemon.service; then
-    echo "-> Stopping existing service for update / Parando serviço existente para atualização..."
+    echo "$MSG_STOP"
     systemctl --user stop dell-g15-daemon.service
 fi
 
@@ -23,11 +44,9 @@ fi
 mkdir -p "$HOME/.local/bin"
 cp bin/g15-daemon.sh "$HOME/.local/bin/"
 cp bin/g15-cycle.sh "$HOME/.local/bin/"
-cp bin/kbd_toggle.sh "$HOME/.local/bin/"
 chmod +x "$HOME/.local/bin/g15-daemon.sh"
 chmod +x "$HOME/.local/bin/g15-cycle.sh"
-chmod +x "$HOME/.local/bin/kbd_toggle.sh"
-echo "-> Scripts installed / Scripts instalados"
+echo "$MSG_SCRIPTS"
 
 # 3. Setup Systemd Service
 mkdir -p "$HOME/.config/systemd/user/"
@@ -39,41 +58,27 @@ After=graphical-session.target
 [Service]
 ExecStart=$HOME/.local/bin/g15-daemon.sh
 Restart=always
-RestartSec=3
+RestartSec=5
 
 [Install]
 WantedBy=default.target
 EOF
-echo "-> Systemd service created / Serviço Systemd criado"
+echo "$MSG_SERVICE"
 
-# 4. Setup Desktop Entries (App Menu)
-mkdir -p "$HOME/.local/share/applications/"
-sed "s|\$HOME|$HOME|g" desktop/g15-sync-cycle.desktop > "$HOME/.local/share/applications/g15-sync-cycle.desktop"
-sed "s|\$HOME|$HOME|g" desktop/g15-brightness-cycle.desktop > "$HOME/.local/share/applications/g15-brightness-cycle.desktop"
-echo "-> App Menu shortcuts created / Atalhos no menu criados"
-
-# 5. Udev Rules
+# 4. Udev Rules (For non-root hardware access)
 if [ ! -f "/etc/udev/rules.d/10-alienware.rules" ]; then
-    echo "--------------------------------------"
-    echo "EN: Do you want to install udev rules for non-root hardware access?"
-    echo "PT: Deseja instalar as regras udev para acesso ao hardware sem root?"
-    read -p "(y/n) / (s/n): " -n 1 -r
-    echo
-    if [[ $REPLY =~ ^[YySs]$ ]]; then
-        sudo cp udev/10-alienware.rules /etc/udev/rules.d/
-        sudo udevadm control --reload-rules
-        sudo udevadm trigger
-        echo "-> Udev rules installed / Regras udev instaladas"
-    fi
-else
-    echo "-> Udev rules already present / Regras udev já presentes"
+    echo "$MSG_UDEV"
+    sudo cp udev/10-alienware.rules /etc/udev/rules.d/
+    sudo udevadm control --reload-rules
+    sudo udevadm trigger
+    # Load i2c-dev for stability
+    sudo modprobe i2c-dev
+    echo "i2c-dev" | sudo tee /etc/modules-load.d/i2c-dev.conf
 fi
 
-# 6. Reload and Start
+# 5. Reload and Start
 systemctl --user daemon-reload
 systemctl --user enable dell-g15-daemon.service
 systemctl --user restart dell-g15-daemon.service
 
-echo "--------------------------------------"
-echo "Installation/Update complete! / Instalação/Atualização completa!"
-echo "The shortcuts are now available in your App Menu. / Os atalhos estão no menu."
+echo -e "$MSG_DONE"
