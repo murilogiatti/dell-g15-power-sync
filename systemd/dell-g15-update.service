@@ -1,0 +1,9 @@
+[Unit]
+Description=Dell G15 Power Sync Auto-Updater
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/g15-update.sh
+Environment="LANG=C.UTF-8"

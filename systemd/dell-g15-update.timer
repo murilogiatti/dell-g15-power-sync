@@ -1,0 +1,10 @@
+[Unit]
+Description=Timer for Dell G15 Power Sync Auto-Updater (every 48 hours)
+
+[Timer]
+OnBootSec=15min
+OnUnitActiveSec=48h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -68,8 +68,9 @@ chmod +x install.sh
 *   **Monitoring**: Native Sysfs Backlight Interface
 
 ### 🔄 Auto-Update / Atualização Automática
-O projeto agora inclui um mecanismo de atualização automática local via GitHub.
-The project now includes a local auto-update mechanism via GitHub.
+**🇧🇷 Português:** O projeto agora inclui um mecanismo de atualização automática local via GitHub. Ele é executado via um `systemd timer` a cada **48 horas** em segundo plano, garantindo que o seu serviço esteja sempre atualizado com as últimas otimizações, de forma invisível. Você também pode forçar a atualização a qualquer momento digitando:
+
+**🇺🇸 English:** The project now includes a local auto-update mechanism via GitHub. It runs securely via a `systemd timer` every **48 hours** in the background, ensuring your service is always up-to-date with the latest optimizations, invisibly. You can also force an update anytime by running:
 ```bash
 g15-update.sh
 ```
@@ -77,6 +78,9 @@ g15-update.sh
 ```bash
 # Check service status / Ver status do serviço
 systemctl --user status dell-g15-daemon.service
+
+# Check update timer status / Ver status do timer de atualização
+systemctl --user status dell-g15-update.timer
 
 # Live logs / Logs em tempo real
 journalctl --user -u dell-g15-daemon.service -f

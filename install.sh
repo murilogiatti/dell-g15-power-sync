@@ -54,6 +54,8 @@ echo "$MSG_SCRIPTS"
 # 3. Setup Systemd Service
 mkdir -p "$HOME/.config/systemd/user/"
 cp systemd/dell-g15-daemon.service "$HOME/.config/systemd/user/dell-g15-daemon.service"
+cp systemd/dell-g15-update.service "$HOME/.config/systemd/user/dell-g15-update.service"
+cp systemd/dell-g15-update.timer "$HOME/.config/systemd/user/dell-g15-update.timer"
 echo "$MSG_SERVICE"
 
 # 4. Udev Rules (For non-root hardware access)
@@ -71,5 +73,7 @@ fi
 systemctl --user daemon-reload
 systemctl --user enable dell-g15-daemon.service
 systemctl --user restart dell-g15-daemon.service
+systemctl --user enable dell-g15-update.timer
+systemctl --user start dell-g15-update.timer
 
 echo -e "$MSG_DONE"
