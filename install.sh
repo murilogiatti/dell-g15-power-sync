@@ -50,19 +50,7 @@ echo "$MSG_SCRIPTS"
 
 # 3. Setup Systemd Service
 mkdir -p "$HOME/.config/systemd/user/"
-cat <<EOF > "$HOME/.config/systemd/user/dell-g15-daemon.service"
-[Unit]
-Description=Dell G15 Power & LED Sync
-After=graphical-session.target
-
-[Service]
-ExecStart=$HOME/.local/bin/g15-daemon.sh
-Restart=always
-RestartSec=5
-
-[Install]
-WantedBy=default.target
-EOF
+cp systemd/dell-g15-daemon.service "$HOME/.config/systemd/user/dell-g15-daemon.service"
 echo "$MSG_SERVICE"
 
 # 4. Udev Rules (For non-root hardware access)
