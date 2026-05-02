@@ -67,6 +67,13 @@ chmod +x install.sh
 *   **Trigger**: Power-Profiles-Daemon (Native Linux Profiles)
 *   **Monitoring**: Native Sysfs Backlight Interface
 
+### 🔄 Auto-Update / Atualização Automática
+O projeto agora inclui um mecanismo de atualização automática local via GitHub.
+The project now includes a local auto-update mechanism via GitHub.
+```bash
+g15-update.sh
+```
+
 ```bash
 # Check service status / Ver status do serviço
 systemctl --user status dell-g15-daemon.service
