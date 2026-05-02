@@ -45,8 +45,10 @@ fi
 mkdir -p "$HOME/.local/bin"
 cp bin/g15-daemon.sh "$HOME/.local/bin/"
 cp bin/g15-cycle.sh "$HOME/.local/bin/"
+cp bin/g15-update.sh "$HOME/.local/bin/"
 chmod +x "$HOME/.local/bin/g15-daemon.sh"
 chmod +x "$HOME/.local/bin/g15-cycle.sh"
+chmod +x "$HOME/.local/bin/g15-update.sh"
 echo "$MSG_SCRIPTS"
 
 # 3. Setup Systemd Service
@@ -71,4 +73,3 @@ systemctl --user enable dell-g15-daemon.service
 systemctl --user restart dell-g15-daemon.service
 
 echo -e "$MSG_DONE"
-ONE"
