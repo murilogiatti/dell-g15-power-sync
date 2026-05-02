@@ -8,7 +8,7 @@ DEVICE_NAME="Dell G Series LED Controller"
 BACKLIGHT_PATH="/sys/class/backlight/amdgpu_bl2"
 
 # Localization
-LANG_CODE=$(echo $LANG | cut -d'_' -f1)
+LANG_CODE="${LANG%%_*}"
 if [ "$LANG_CODE" == "pt" ]; then
     MSG_TITLE="Dell G15"
     MSG_PROFILE="Perfil"
@@ -29,19 +29,24 @@ fi
 LAST_STATE=""
 LAST_PROFILE=""
 
-get_screen_brightness_perc() {
+# Global variable to avoid subshells
+BRIGHTNESS_PERC=100
+
+update_screen_brightness_perc() {
     if [ -d "$BACKLIGHT_PATH" ]; then
-        local curr=$(cat "$BACKLIGHT_PATH/brightness")
-        local max=$(cat "$BACKLIGHT_PATH/max_brightness")
-        echo $(( (curr * 100) / max ))
+        local curr max
+        read -r curr < "$BACKLIGHT_PATH/brightness"
+        read -r max < "$BACKLIGHT_PATH/max_brightness"
+        BRIGHTNESS_PERC=$(( (curr * 100) / max ))
     else
-        echo 100
+        BRIGHTNESS_PERC=100
     fi
 }
 
 apply_settings() {
     local profile=$(powerprofilesctl get)
-    local brightness=$(get_screen_brightness_perc)
+    update_screen_brightness_perc
+    local brightness=$BRIGHTNESS_PERC
     
     # Define Base Color
     local color="0000FF" # Default Blue (Power Save)

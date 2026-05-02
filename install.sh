@@ -2,7 +2,7 @@
 # Installer for Dell G15 Power Sync (Refactored for Ubuntu 26.04)
 
 # Localization
-LANG_CODE=$(echo $LANG | cut -d'_' -f1)
+LANG_CODE="${LANG%%_*}"
 if [ "$LANG_CODE" == "pt" ]; then
     MSG_START="--- Dell G15 Power Sync Instalador ---"
     MSG_CHECK="-> Verificando dependências..."
