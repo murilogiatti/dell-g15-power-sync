@@ -8,7 +8,7 @@ DEVICE_NAME="Dell G Series LED Controller"
 BACKLIGHT_PATH="/sys/class/backlight/amdgpu_bl2"
 
 # Localization
-LANG_CODE=$(echo $LANG | cut -d'_' -f1)
+LANG_CODE=$(echo "$LANG" | cut -d'_' -f1)
 if [ "$LANG_CODE" == "pt" ]; then
     MSG_TITLE="Dell G15"
     MSG_PROFILE="Perfil"
@@ -31,8 +31,10 @@ LAST_PROFILE=""
 
 get_screen_brightness_perc() {
     if [ -d "$BACKLIGHT_PATH" ]; then
-        local curr=$(cat "$BACKLIGHT_PATH/brightness")
-        local max=$(cat "$BACKLIGHT_PATH/max_brightness")
+        local curr
+        curr=$(cat "$BACKLIGHT_PATH/brightness")
+        local max
+        max=$(cat "$BACKLIGHT_PATH/max_brightness")
         echo $(( (curr * 100) / max ))
     else
         echo 100
@@ -40,8 +42,10 @@ get_screen_brightness_perc() {
 }
 
 apply_settings() {
-    local profile=$(powerprofilesctl get)
-    local brightness=$(get_screen_brightness_perc)
+    local profile
+    profile=$(powerprofilesctl get)
+    local brightness
+    brightness=$(get_screen_brightness_perc)
     
     # Define Base Color
     local color="0000FF" # Default Blue (Power Save)
@@ -58,10 +62,11 @@ apply_settings() {
     local state_id="${profile}_${zone}"
     if [ "$state_id" != "$LAST_STATE" ]; then
         # Calculate dimmed RGB
-        local r=$(printf "%02X" $(( (16#${color:0:2} * zone) / 100 )))
-        local g=$(printf "%02X" $(( (16#${color:2:2} * zone) / 100 )))
-        local b=$(printf "%02X" $(( (16#${color:4:2} * zone) / 100 )))
-        local final_color="${r}${g}${b}"
+        local r g b final_color
+        r=$(printf "%02X" $(( (16#${color:0:2} * zone) / 100 )))
+        g=$(printf "%02X" $(( (16#${color:2:2} * zone) / 100 )))
+        b=$(printf "%02X" $(( (16#${color:4:2} * zone) / 100 )))
+        final_color="${r}${g}${b}"
         
         openrgb --noautoconnect -d "$DEVICE_NAME" -c "$final_color" -m Static > /dev/null 2>&1
         

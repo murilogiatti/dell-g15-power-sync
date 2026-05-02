@@ -1,8 +1,9 @@
 #!/bin/bash
+set -e
 # Installer for Dell G15 Power Sync (Refactored for Ubuntu 26.04)
 
 # Localization
-LANG_CODE=$(echo $LANG | cut -d'_' -f1)
+LANG_CODE=$(echo "$LANG" | cut -d'_' -f1)
 if [ "$LANG_CODE" == "pt" ]; then
     MSG_START="--- Dell G15 Power Sync Instalador ---"
     MSG_CHECK="-> Verificando dependências..."
@@ -28,7 +29,8 @@ echo -e "$MSG_START"
 # 0. Check Dependencies
 echo "$MSG_CHECK"
 for cmd in openrgb powerprofilesctl notify-send; do
-    if ! command -v $cmd &> /dev/null; then
+    if ! command -v "$cmd" &> /dev/null; then
+        # shellcheck disable=SC2059
         printf "$MSG_ERROR\n" "$cmd"
         exit 1
     fi
