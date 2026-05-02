@@ -44,8 +44,7 @@ update_screen_brightness_perc() {
 }
 
 apply_settings() {
-    local profile
-    profile=$(powerprofilesctl get)
+    local profile=$(powerprofilesctl get)
     update_screen_brightness_perc
     local brightness=$BRIGHTNESS_PERC
     
