@@ -1,4 +1,5 @@
 #!/bin/bash
+set -e
 # Uninstaller for Dell G15 Power Sync
 
 echo "--- Dell G15 Power Sync Uninstaller ---"

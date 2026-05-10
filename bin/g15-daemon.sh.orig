@@ -44,16 +44,15 @@ update_screen_brightness_perc() {
 }
 
 apply_settings() {
-    local profile
-    profile=$(powerprofilesctl get)
+    local profile=$(powerprofilesctl get)
     update_screen_brightness_perc
     local brightness=$BRIGHTNESS_PERC
-    
+
     # Define Base Color
     local color="0000FF" # Default Blue (Power Save)
     [[ "$profile" == *"performance"* ]] && color="FF0000"
     [[ "$profile" == *"balanced"* ]] && color="00FF00"
-    
+
     # Define Brightness Zone (0-30, 31-70, 71-100)
     local zone=100
     if [ "$brightness" -le 30 ]; then zone=30;
@@ -71,14 +70,14 @@ apply_settings() {
         local b
         b=$(printf "%02X" $(( (16#${color:4:2} * zone) / 100 )))
         local final_color="${r}${g}${b}"
-        
+
         openrgb --noautoconnect -d "$DEVICE_NAME" -c "$final_color" -m Static > /dev/null 2>&1
-        
+
         # Define Color Name for Notification
         local color_name="$COLOR_BLUE"
         [[ "$color" == "FF0000" ]] && color_name="$COLOR_RED"
         [[ "$color" == "00FF00" ]] && color_name="$COLOR_GREEN"
-        
+
         # Notify profile change
         if [ "$profile" != "$LAST_PROFILE" ]; then
             notify-send -t 1500 -a "$MSG_TITLE" "${MSG_PROFILE}: ${profile^}" "${MSG_SYNCED}: ${color_name}"

@@ -1,4 +1,5 @@
 #!/bin/bash
+set -e
 # Cycle power profiles - The daemon will detect the change and update LEDs.
 CURRENT=$(powerprofilesctl get)
 case "$CURRENT" in
