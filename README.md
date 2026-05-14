@@ -23,7 +23,7 @@ It keeps your aesthetic clean and consistent by locking the LED color to a prist
 *No bloated GUIs. No annoying popups. Just pure ambient harmony.*
 
 ### ✨ Features
-- **Pure White Aesthetic**: Locks the keyboard to 100% white (`FFFFFF`) for a clean, professional look.
+- **Pure White Aesthetic**: Locks the keyboard to a stable white. It caps the maximum brightness value at ~90% (`#E6E6E6`) instead of absolute `#FFFFFF` to prevent the hardware power limiter from dropping the brightness.
 - **Dynamic 5-Tier Sync**: Intelligently tracks your `amdgpu_bl2` screen brightness and maps it to five safe, visible zones:
   - 🌙 0-20% Screen ➔ **10% Keyboard** *(Safe minimum to prevent controller lockups)*
   - 🌘 21-40% Screen ➔ **30% Keyboard**
@@ -69,7 +69,7 @@ Ele mantém sua estética limpa e consistente, fixando a cor dos LEDs em um bran
 *Sem interfaces pesadas. Sem notificações irritantes. Apenas harmonia de ambiente.*
 
 ### ✨ Funcionalidades
-- **Estética Branco Puro**: Trava o teclado em 100% branco (`FFFFFF`) para um visual limpo e profissional.
+- **Estética Branco Puro**: Trava o teclado em um branco estável. O pico de brilho é inteligentemente limitado a ~90% (`#E6E6E6`) em vez do absoluto `#FFFFFF`, impedindo que o limitador de energia do hardware cause quedas repentinas de luminosidade.
 - **Sincronização Dinâmica em 5 Níveis**: Acompanha de forma inteligente o brilho da tela (`amdgpu_bl2`) e mapeia para cinco zonas seguras:
   - 🌙 0-20% Tela ➔ **10% Teclado** *(Mínimo seguro para evitar travamentos do controlador)*
   - 🌘 21-40% Tela ➔ **30% Teclado**
