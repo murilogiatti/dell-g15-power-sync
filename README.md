@@ -1,92 +1,103 @@
-# 💻 Dell G15 Power & LED Sync (v4)
-
-<p align="center">
-  <img src="https://img.shields.io/badge/Ubuntu-26.04-orange?style=for-the-badge&logo=ubuntu" />
-  <img src="https://img.shields.io/badge/GNOME-50-blue?style=for-the-badge&logo=gnome" />
-  <img src="https://img.shields.io/badge/Status-Active-brightgreen?style=for-the-badge" />
-  <img src="https://img.shields.io/badge/Language-Bilingual-blue?style=for-the-badge" />
-</p>
-
-> **Transforme a iluminação do seu Dell G15 em uma extensão inteligente do seu sistema.**
+<div align="center">
+  <h1>🌌 Dell G15 Ambient Sync</h1>
+  <p><i>A minimalist, elegant, and intelligent keyboard backlight synchronizer for Dell G15 laptops on Linux.</i></p>
+  
+  [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+  [![Platform: Linux](https://img.shields.io/badge/Platform-Linux-blue.svg)]()
+  
+  <p>
+    <a href="#english">English</a> • <a href="#português">Português</a>
+  </p>
+</div>
 
 ---
 
-## 🇧🇷 Português
+<h2 id="english">🇬🇧 English</h2>
 
-### 💡 Por que este projeto existe?
-Laptops Dell G15 são máquinas poderosas, mas no Linux, a integração do teclado RGB muitas vezes é esquecida. O **Dell G15 Power & LED Sync** resolve isso de forma elegante, eliminando a necessidade de softwares pesados ou ajustes manuais constantes. Ele faz com que o hardware "reaja" ao que você está fazendo.
+### The Concept
+Why manually adjust your keyboard backlight when your system can do it for you? 
+**Dell G15 Ambient Sync** is a lightweight, invisible daemon designed to seamlessly bridge your screen's brightness with your keyboard's illumination. 
 
-### ✨ Funcionalidades Incríveis
+It keeps your aesthetic clean and consistent by locking the LED color to a pristine, pure white (`#FFFFFF`) and dynamically scaling its intensity across 5 carefully tuned levels based on your monitor's brightness. 
 
-*   **🎨 Sincronização Inteligente de Cores**: Seu teclado comunica visualmente o estado de energia do laptop.
-    *   🔴 **Modo Performance**: O teclado incendeia em Vermelho, indicando que o hardware está pronto para força total.
-    *   🟢 **Modo Equilibrado**: Um Verde suave para o uso diário e produtividade.
-    *   🔵 **Modo Economia**: Azul profundo, sinalizando que o sistema está otimizando a bateria.
-*   **🌙 Brilho Dinâmico (Smart Dimming)**: Chega de teclado ofuscando seus olhos no escuro. O script lê o brilho da sua tela em tempo real e ajusta a intensidade do teclado proporcionalmente em 3 zonas automáticas (30%, 70%, 100%).
-*   **🚀 Performance "Zero-Impact"**: Escrito puramente em Bash, o daemon consome menos de 0,01% de CPU. Ele é independente, não depende de drivers proprietários pesados e usa caminhos nativos do kernel (`/sys/class/backlight`).
-*   **🔔 Notificações Nativas**: Integra-se perfeitamente ao Centro de Notificações do GNOME para avisar quando o perfil e a cor foram alterados.
+*No bloated GUIs. No annoying popups. Just pure ambient harmony.*
 
-### 📦 Instalação Rápida
+### ✨ Features
+- **Pure White Aesthetic**: Locks the keyboard to 100% white (`FFFFFF`) for a clean, professional look.
+- **Dynamic 5-Tier Sync**: Intelligently tracks your `amdgpu_bl2` screen brightness and maps it to five safe, visible zones:
+  - 🌙 0-20% Screen ➔ **10% Keyboard** *(Safe minimum to prevent controller lockups)*
+  - 🌘 21-40% Screen ➔ **30% Keyboard**
+  - 🌗 41-60% Screen ➔ **50% Keyboard**
+  - 🌔 61-80% Screen ➔ **75% Keyboard**
+  - 🌕 81-100% Screen ➔ **100% Keyboard**
+- **Zero Distractions**: Operates completely silently in the background as a user-level Systemd service.
+
+### 🛠️ Prerequisites
+- `openrgb` (must be installed and successfully detecting your Dell G Series LED Controller).
+- Supported environment: Ubuntu/Debian-based distributions (tested on Ubuntu 26.04).
+
+### 🚀 Installation
 ```bash
-git clone https://github.com/murilogiatti/dell-g15-power-sync
+git clone https://github.com/murilo/dell-g15-power-sync.git
 cd dell-g15-power-sync
-chmod +x install.sh
 ./install.sh
 ```
+*Note: The installer will prompt for `sudo` to configure Udev rules for OpenRGB hardware access.*
+
+### 🔄 Migrating from Legacy Versions
+If you used the older version of this script (the one with colored power profiles and desktop notifications), simply run the update script to cleanly purge the legacy files before installing the new minimalist version:
+```bash
+./update.sh
+```
+
+### 🗑️ Uninstallation
+To completely remove the daemon and all its services:
+```bash
+./uninstall.sh
+```
 
 ---
 
-## 🇺🇸 English
+<h2 id="português">🇧🇷 Português</h2>
 
-### 💡 Why this project?
-Dell G15 laptops are powerhouses, but on Linux, RGB integration is often overlooked. This project bridges that gap, making your keyboard backlight a smart extension of your OS. No more manual adjustments—your hardware finally "reacts" to your workflow.
+### O Conceito
+Por que ajustar manualmente a luz do seu teclado quando o seu sistema pode fazer isso por você?
+O **Dell G15 Ambient Sync** é um daemon levíssimo e invisível, criado para sincronizar perfeitamente o brilho da sua tela com a iluminação do teclado.
 
-### ✨ Key Features
+Ele mantém sua estética limpa e consistente, fixando a cor dos LEDs em um branco puro (`#FFFFFF`) e ajustando dinamicamente a intensidade em 5 níveis cuidadosamente calibrados, acompanhando o brilho do seu monitor.
 
-*   **🎨 Intelligent Color Sync**: Your keyboard visually communicates the system's power state.
-    *   🔴 **Performance Mode**: Fires up in Red, showing the system is ready for heavy tasks.
-    *   🟢 **Balanced Mode**: A soothing Green for daily productivity.
-    *   🔵 **Power Saver**: Deep Blue, signaling battery optimization is active.
-*   **🌙 Smart Dynamic Brightness**: No more blinding lights in dark rooms. The script monitors your screen brightness in real-time and auto-dims the keyboard across 3 zones (30%, 70%, 100%).
-*   **🚀 Zero-Impact Performance**: Pure Bash implementation. It consumes less than 0.01% CPU, bypassing heavy proprietary software by using native kernel paths (`/sys/class/backlight`).
-*   **🔔 Native Notifications**: Seamlessly integrated with GNOME to keep you informed about profile and color shifts.
+*Sem interfaces pesadas. Sem notificações irritantes. Apenas harmonia de ambiente.*
 
-### 📦 Quick Start
+### ✨ Funcionalidades
+- **Estética Branco Puro**: Trava o teclado em 100% branco (`FFFFFF`) para um visual limpo e profissional.
+- **Sincronização Dinâmica em 5 Níveis**: Acompanha de forma inteligente o brilho da tela (`amdgpu_bl2`) e mapeia para cinco zonas seguras:
+  - 🌙 0-20% Tela ➔ **10% Teclado** *(Mínimo seguro para evitar travamentos do controlador)*
+  - 🌘 21-40% Tela ➔ **30% Teclado**
+  - 🌗 41-60% Tela ➔ **50% Teclado**
+  - 🌔 61-80% Tela ➔ **75% Teclado**
+  - 🌕 81-100% Tela ➔ **100% Teclado**
+- **Zero Distrações**: Opera de forma totalmente silenciosa no plano de fundo como um serviço Systemd local.
+
+### 🛠️ Pré-requisitos
+- `openrgb` (deve estar instalado e detectando com sucesso o Controlador de LED Dell G Series).
+- Ambiente suportado: Distribuições baseadas em Ubuntu/Debian (testado no Ubuntu 26.04).
+
+### 🚀 Instalação
 ```bash
-git clone https://github.com/murilogiatti/dell-g15-power-sync
+git clone https://github.com/murilo/dell-g15-power-sync.git
 cd dell-g15-power-sync
-chmod +x install.sh
 ./install.sh
 ```
+*Nota: O instalador solicitará `sudo` para configurar as regras do Udev e garantir o acesso do OpenRGB ao hardware.*
 
----
-
-## 🛠️ Tech Stack & Management / Gerenciamento
-*   **Core**: Bash Scripting
-*   **Engine**: OpenRGB (Hardware Control)
-*   **Trigger**: Power-Profiles-Daemon (Native Linux Profiles)
-*   **Monitoring**: Native Sysfs Backlight Interface
-
-### 🔄 Auto-Update / Atualização Automática
-**🇧🇷 Português:** O projeto agora inclui um mecanismo de atualização automática local via GitHub. Ele é executado via um `systemd timer` a cada **48 horas** em segundo plano, garantindo que o seu serviço esteja sempre atualizado com as últimas otimizações, de forma invisível. Você também pode forçar a atualização a qualquer momento digitando:
-
-**🇺🇸 English:** The project now includes a local auto-update mechanism via GitHub. It runs securely via a `systemd timer` every **48 hours** in the background, ensuring your service is always up-to-date with the latest optimizations, invisibly. You can also force an update anytime by running:
+### 🔄 Atualizando da Versão Antiga (Legada)
+Se você utilizava a versão mais antiga deste script (aquela com perfis de energia coloridos e notificações na área de trabalho), basta rodar o script de atualização para limpar completamente os arquivos antigos antes de instalar a nova versão minimalista:
 ```bash
-g15-update.sh
+./update.sh
 ```
 
+### 🗑️ Desinstalação
+Para remover completamente o daemon e todos os seus serviços:
 ```bash
-# Check service status / Ver status do serviço
-systemctl --user status dell-g15-daemon.service
-
-# Check update timer status / Ver status do timer de atualização
-systemctl --user status dell-g15-update.timer
-
-# Live logs / Logs em tempo real
-journalctl --user -u dell-g15-daemon.service -f
+./uninstall.sh
 ```
-
----
-<p align="center">
-  Criado com ❤️ para a comunidade Linux por <b>Murilo Giatti</b>.
-</p>
