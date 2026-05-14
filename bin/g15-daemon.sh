@@ -40,9 +40,9 @@ apply_settings() {
     # Check if anything changed
     local state_id="${zone}"
     if [ "$state_id" != "$LAST_STATE" ]; then
-        # Calculate dimmed RGB for white (FFFFFF)
+        # Calculate dimmed RGB for white (FFFFFF) - max limited to 230 to avoid hardware power limiter drop
         local val
-        val=$(printf "%02X" $(( (255 * zone) / 100 )))
+        val=$(printf "%02X" $(( (230 * zone) / 100 )))
         local final_color="${val}${val}${val}"
         
         openrgb --noautoconnect -d "$DEVICE_NAME" -c "$final_color" -m Static > /dev/null 2>&1
