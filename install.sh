@@ -30,13 +30,11 @@ echo -e "$MSG_START"
 
 # 0. Check Dependencies
 echo "$MSG_CHECK"
-for cmd in openrgb; do
-    if ! command -v "$cmd" &> /dev/null; then
-        # shellcheck disable=SC2059
-        printf "$MSG_ERROR\n" "$cmd"
-        exit 1
-    fi
-done
+if ! command -v openrgb &> /dev/null; then
+    # shellcheck disable=SC2059
+    printf "$MSG_ERROR\n" "openrgb"
+    exit 1
+fi
 
 # 1. Stop existing service if running
 if systemctl --user is-active --quiet dell-g15-daemon.service; then
