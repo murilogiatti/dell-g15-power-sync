@@ -59,15 +59,15 @@ class TestDellG15Daemon(unittest.TestCase):
         perc, screen_on = g15.read_screen_state(bl_dir)
         self.assertFalse(screen_on)
 
-        # When brightness is 0, screen_on must be False
+        # When brightness is 0 but bl_power is 0 (minimum slider step), screen_on stays True (10% floor)
         bl_dir = self._create_mock_backlight("amdgpu_bl2", 0, 255, bl_power=0)
         perc, screen_on = g15.read_screen_state(bl_dir)
         self.assertEqual(perc, 0)
-        self.assertFalse(screen_on)
+        self.assertTrue(screen_on)
 
     def test_compute_target_zone_initial_mapping(self):
-        self.assertEqual(g15.compute_target_zone(0, True, -1), 0)
         self.assertEqual(g15.compute_target_zone(50, False, 50), 0)
+        self.assertEqual(g15.compute_target_zone(0, True, -1), 10)
         self.assertEqual(g15.compute_target_zone(1, True, -1), 10)
         self.assertEqual(g15.compute_target_zone(20, True, -1), 10)
         self.assertEqual(g15.compute_target_zone(21, True, -1), 30)
@@ -100,16 +100,23 @@ class TestDellG15Daemon(unittest.TestCase):
             [0x00, 0x03, 0x26, 100, 0x00, 0x04, 0x00, 0x01, 0x02, 0x03],
         )
 
-        # Zone 100 -> 5 packets with RGB = 0xE6 (230) and DIM = 0
+        # Zone 100 -> DIM(0) first, NEW, 4x(SEL+ACT), and FINISH_PLAY as the final packet!
         max_pkts = g15.build_zone_packets(100, g15.ZONES_STANDARD)
-        self.assertEqual(len(max_pkts), 5)
+        self.assertEqual(len(max_pkts), 11)
+        # First packet must be DIM(0)
         self.assertEqual(
-            list(max_pkts[2][:11]),
+            list(max_pkts[0][:10]),
+            [0x00, 0x03, 0x26, 0x00, 0x00, 0x04, 0x00, 0x01, 0x02, 0x03],
+        )
+        # First zone ADD_ACTION must have RGB = 0xE6 (230)
+        self.assertEqual(
+            list(max_pkts[3][:11]),
             [0x00, 0x03, 0x24, 0x00, 0x07, 0xD0, 0x00, 0xFA, 0xE6, 0xE6, 0xE6],
         )
+        # Final packet MUST be USER_ANIM_FINISH_PLAY (0x21 0x00 0x03 0xFF 0xFF)
         self.assertEqual(
-            list(max_pkts[4][:10]),
-            [0x00, 0x03, 0x26, 0x00, 0x00, 0x04, 0x00, 0x01, 0x02, 0x03],
+            list(max_pkts[-1][:9]),
+            [0x00, 0x03, 0x21, 0x00, 0x03, 0xFF, 0xFF, 0x00, 0x00],
         )
 
     def test_parse_relevant_uevent(self):

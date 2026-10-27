@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """
-Dell G15 Ambient Sync Daemon (Direct USB HID + Kernel Netlink Events)
+Dell G15 Ambient Sync Daemon (Direct USB HID + Kernel Netlink / Inotify Events)
 Zero external dependencies. Data-Oriented Design (flat tables, pre-allocated buffers).
 Compatible with Ubuntu/Debian and Fedora Workstation/Kinoite (Atomic).
 """
 
+import ctypes
+import ctypes.util
 import fcntl
 import glob
 import os
@@ -23,13 +25,20 @@ PACKET_DELAY_SEC = 0.06
 DEBOUNCE_SEC = 0.15
 NETLINK_KOBJECT_UEVENT = 15
 
+# Inotify constants for direct sysfs brightness file watching
+IN_MODIFY = 0x00000002
+IN_ATTRIB = 0x00000004
+IN_CLOSE_WRITE = 0x00000008
+IN_NONBLOCK = 0x00000800
+IN_CLOEXEC = 0x00080000
+
 # Platform IDs using high zone indices (Dell G15 5520 / 5530) vs standard (5511 / 5515 / 5525 / 5535)
 ALT_ZONE_PLATFORMS = (0x0E07, 0x0E0A)
 ZONES_STANDARD = (0x00, 0x01, 0x02, 0x03)
 ZONES_ALT = (0x10, 0x11, 0x12, 0x13)
 
 # --- Data-Oriented Brightness & Hysteresis Tables (SoA) ---
-# 5 active intensity tiers + 0 for Screen Off.
+# 5 active intensity tiers + 0 for DPMS Screen Off.
 # Peak capped at 230 (0xE6 -> #E6E6E6) to prevent hardware power limiter drops.
 ZONE_LEVELS = (10, 30, 50, 75, 100)
 ZONE_RGB_BYTES = (0x17, 0x45, 0x73, 0xAC, 0xE6)
@@ -88,13 +97,13 @@ def read_screen_state(backlight_dir):
         return 100, True
 
     perc = (curr * 100) // max_val
-    screen_on = (bl_power == 0) and (curr > 0)
+    screen_on = bl_power == 0
     return perc, screen_on
 
 
 def compute_target_zone(brightness_perc, screen_on, current_zone):
     """Maps screen brightness to target keyboard zone (0, 10, 30, 50, 75, 100) with ±2% hysteresis."""
-    if not screen_on or brightness_perc <= 0:
+    if not screen_on:
         return 0
 
     if current_zone in ZONE_LEVELS:
@@ -105,7 +114,6 @@ def compute_target_zone(brightness_perc, screen_on, current_zone):
             idx -= 1
         return ZONE_LEVELS[idx]
 
-    # Initial classification (when coming from uninitialized -1 or screen-off 0)
     for i, threshold in enumerate(ZONE_THRESHOLDS):
         if brightness_perc <= threshold:
             return ZONE_LEVELS[i]
@@ -124,9 +132,11 @@ def build_packet(cmd_bytes):
 
 def build_zone_packets(zone_level, zone_ids=ZONES_STANDARD):
     """
-    Returns the sequence of 34-byte HID Feature reports for the given zone_level.
-    - zone_level == 0: 1 packet (Hardware Dim 100% -> LEDs cleanly off)
-    - zone_level in ZONE_LEVELS: 5 packets (Static White at calibrated intensity + Dim 0%)
+    Builds the exact 34-byte HID Feature report sequence for the AW-ELC controller.
+    CRITICAL HARDWARE RULE:
+    - Command 0x26 (DIM) MUST be sent BEFORE 0x21 0x00 0x01 (USER_ANIM_NEW).
+      Sending 0x26 after 0x21 0x00 0x03 (FINISH_PLAY) cancels the volatile 0xFFFF animation slot!
+    - Each zone in zone_ids is selected with 0x23 followed by 0x24 (ADD_ACTION), ending with 0x21 FINISH_PLAY.
     """
     num_zones = len(zone_ids)
     if zone_level == 0:
@@ -134,13 +144,16 @@ def build_zone_packets(zone_level, zone_ids=ZONES_STANDARD):
 
     idx = ZONE_LEVELS.index(zone_level)
     rgb = ZONE_RGB_BYTES[idx]
-    return [
-        build_packet((0x21, 0x00, 0x01, 0xFF, 0xFF, 0x00, 0x00)),
-        build_packet((0x23, 0x01, 0x00, num_zones, *zone_ids)),
-        build_packet((0x24, 0x00, 0x07, 0xD0, 0x00, 0xFA, rgb, rgb, rgb)),
-        build_packet((0x21, 0x00, 0x03, 0xFF, 0xFF, 0x00, 0x00)),
+
+    packets = [
         build_packet((0x26, 0x00, 0x00, num_zones, *zone_ids)),
+        build_packet((0x21, 0x00, 0x01, 0xFF, 0xFF, 0x00, 0x00)),
     ]
+    for z in zone_ids:
+        packets.append(build_packet((0x23, 0x01, 0x00, 0x01, z)))
+        packets.append(build_packet((0x24, 0x00, 0x07, 0xD0, 0x00, 0xFA, rgb, rgb, rgb)))
+    packets.append(build_packet((0x21, 0x00, 0x03, 0xFF, 0xFF, 0x00, 0x00)))
+    return packets
 
 
 def send_hid_packet(fd, pkt, delay=PACKET_DELAY_SEC):
@@ -196,6 +209,23 @@ def open_netlink_uevent_socket():
     return sock
 
 
+def open_inotify_backlight_watch(backlight_dir):
+    if not backlight_dir or not os.path.isdir(backlight_dir):
+        return -1
+    try:
+        libc_name = ctypes.util.find_library("c") or "libc.so.6"
+        libc = ctypes.CDLL(libc_name, use_errno=True)
+        ifd = libc.inotify_init1(IN_NONBLOCK | IN_CLOEXEC)
+        if ifd < 0:
+            return -1
+        for fname in ("brightness", "actual_brightness", "bl_power"):
+            fpath = os.path.join(backlight_dir, fname).encode("utf-8")
+            libc.inotify_add_watch(ifd, fpath, IN_MODIFY | IN_CLOSE_WRITE | IN_ATTRIB)
+        return ifd
+    except Exception:
+        return -1
+
+
 def parse_relevant_uevent(raw_bytes):
     """Returns 'backlight', 'hidraw', or None from a kernel uevent datagram."""
     text = raw_bytes.decode("utf-8", errors="ignore")
@@ -210,8 +240,7 @@ def run_daemon():
     running = True
 
     def handle_sig(_signum, _frame):
-        nonlocal running
-        running = False
+        sys.exit(0)
 
     signal.signal(signal.SIGTERM, handle_sig)
     signal.signal(signal.SIGINT, handle_sig)
@@ -229,9 +258,12 @@ def run_daemon():
         current_zone = target
 
     sock = open_netlink_uevent_socket()
+    ifd = open_inotify_backlight_watch(backlight_dir)
+    watch_fds = [sock] + ([ifd] if ifd >= 0 else [])
+
     print(
         f"Dell G15 Ambient Sync started (Direct HID: {hidraw_path or 'waiting'}, "
-        f"Backlight: {backlight_dir or 'default'})",
+        f"Backlight: {backlight_dir or 'default'}, Initial: {perc}% -> Zone {target}%)",
         flush=True,
     )
 
@@ -241,19 +273,27 @@ def run_daemon():
     try:
         while running:
             timeout = DEBOUNCE_SEC if (pending_sync or pending_rebind) else None
-            readable, _, _ = select.select([sock], [], [], timeout)
+            readable, _, _ = select.select(watch_fds, [], [], timeout)
 
             if readable:
-                while True:
-                    try:
-                        datagram = sock.recv(4096)
-                    except BlockingIOError:
-                        break
-                    kind = parse_relevant_uevent(datagram)
-                    if kind == "backlight":
-                        pending_sync = True
-                    elif kind == "hidraw":
-                        pending_rebind = True
+                for rfd in readable:
+                    if rfd is sock:
+                        while True:
+                            try:
+                                datagram = sock.recv(4096)
+                            except BlockingIOError:
+                                break
+                            kind = parse_relevant_uevent(datagram)
+                            if kind == "backlight":
+                                pending_sync = True
+                            elif kind == "hidraw":
+                                pending_rebind = True
+                                pending_sync = True
+                    elif rfd == ifd:
+                        try:
+                            os.read(ifd, 4096)
+                        except OSError:
+                            pass
                         pending_sync = True
                 continue
 
@@ -272,10 +312,18 @@ def run_daemon():
                 if target != current_zone:
                     ok, zone_ids = apply_zone_to_hardware(hidraw_path, target, zone_ids)
                     if ok:
+                        print(f"Sync: Screen {perc}% -> Keyboard {target}%", flush=True)
                         current_zone = target
                 pending_sync = False
+    except SystemExit:
+        pass
     finally:
         sock.close()
+        if ifd >= 0:
+            try:
+                os.close(ifd)
+            except OSError:
+                pass
 
 
 if __name__ == "__main__":
