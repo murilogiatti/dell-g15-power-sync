@@ -1,0 +1,282 @@
+#!/usr/bin/env python3
+"""
+Dell G15 Ambient Sync Daemon (Direct USB HID + Kernel Netlink Events)
+Zero external dependencies. Data-Oriented Design (flat tables, pre-allocated buffers).
+Compatible with Ubuntu/Debian and Fedora Workstation/Kinoite (Atomic).
+"""
+
+import fcntl
+import glob
+import os
+import select
+import signal
+import socket
+import sys
+import time
+
+# --- Hardware & Protocol Constants (Alienware AW-ELC 187c:0550 / 187c:0551) ---
+TARGET_HID_IDS = ("187C:00000550", "187C:00000551")
+REPORT_SIZE = 34
+HIDIOCSFEATURE_34 = 0xC0004806 | (REPORT_SIZE << 16)
+HIDIOCGFEATURE_34 = 0xC0004807 | (REPORT_SIZE << 16)
+PACKET_DELAY_SEC = 0.06
+DEBOUNCE_SEC = 0.15
+NETLINK_KOBJECT_UEVENT = 15
+
+# Platform IDs using high zone indices (Dell G15 5520 / 5530) vs standard (5511 / 5515 / 5525 / 5535)
+ALT_ZONE_PLATFORMS = (0x0E07, 0x0E0A)
+ZONES_STANDARD = (0x00, 0x01, 0x02, 0x03)
+ZONES_ALT = (0x10, 0x11, 0x12, 0x13)
+
+# --- Data-Oriented Brightness & Hysteresis Tables (SoA) ---
+# 5 active intensity tiers + 0 for Screen Off.
+# Peak capped at 230 (0xE6 -> #E6E6E6) to prevent hardware power limiter drops.
+ZONE_LEVELS = (10, 30, 50, 75, 100)
+ZONE_RGB_BYTES = (0x17, 0x45, 0x73, 0xAC, 0xE6)
+ZONE_THRESHOLDS = (20, 40, 60, 80)
+HYSTERESIS = 2
+
+# Configurable sysfs roots (overridable in unit tests)
+SYSFS_BACKLIGHT_ROOT = "/sys/class/backlight"
+SYSFS_HIDRAW_ROOT = "/sys/class/hidraw"
+
+
+def resolve_backlight_dir(backlight_root=None):
+    root = backlight_root or SYSFS_BACKLIGHT_ROOT
+    preferred = os.path.join(root, "amdgpu_bl2")
+    if os.path.isdir(preferred):
+        return preferred
+    for pattern in ("amdgpu_bl*", "*"):
+        for candidate in sorted(glob.glob(os.path.join(root, pattern))):
+            if os.path.isdir(candidate):
+                return candidate
+    return None
+
+
+def resolve_hidraw_dev(hidraw_root=None):
+    root = hidraw_root or SYSFS_HIDRAW_ROOT
+    for sys_path in sorted(glob.glob(os.path.join(root, "hidraw*"))):
+        uevent_path = os.path.join(sys_path, "device", "uevent")
+        try:
+            with open(uevent_path, "r", encoding="utf-8") as f:
+                content = f.read().upper()
+            if any(hid_id in content for hid_id in TARGET_HID_IDS):
+                return os.path.join("/dev", os.path.basename(sys_path))
+        except OSError:
+            continue
+    return None
+
+
+def read_int_file(path, default=0):
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return int(f.read().strip())
+    except (OSError, ValueError):
+        return default
+
+
+def read_screen_state(backlight_dir):
+    """Returns (brightness_perc: int, screen_on: bool)."""
+    if not backlight_dir or not os.path.isdir(backlight_dir):
+        return 100, True
+
+    bl_power = read_int_file(os.path.join(backlight_dir, "bl_power"), default=0)
+    curr = read_int_file(os.path.join(backlight_dir, "brightness"), default=100)
+    max_val = read_int_file(os.path.join(backlight_dir, "max_brightness"), default=100)
+
+    if max_val <= 0:
+        return 100, True
+
+    perc = (curr * 100) // max_val
+    screen_on = (bl_power == 0) and (curr > 0)
+    return perc, screen_on
+
+
+def compute_target_zone(brightness_perc, screen_on, current_zone):
+    """Maps screen brightness to target keyboard zone (0, 10, 30, 50, 75, 100) with ±2% hysteresis."""
+    if not screen_on or brightness_perc <= 0:
+        return 0
+
+    if current_zone in ZONE_LEVELS:
+        idx = ZONE_LEVELS.index(current_zone)
+        while idx < 4 and brightness_perc > (ZONE_THRESHOLDS[idx] + HYSTERESIS):
+            idx += 1
+        while idx > 0 and brightness_perc <= (ZONE_THRESHOLDS[idx - 1] - HYSTERESIS):
+            idx -= 1
+        return ZONE_LEVELS[idx]
+
+    # Initial classification (when coming from uninitialized -1 or screen-off 0)
+    for i, threshold in enumerate(ZONE_THRESHOLDS):
+        if brightness_perc <= threshold:
+            return ZONE_LEVELS[i]
+    return ZONE_LEVELS[4]
+
+
+def build_packet(cmd_bytes):
+    """Builds a 34-byte HID Feature report (byte 0 = 0x00, byte 1 = 0x03)."""
+    buf = bytearray(REPORT_SIZE)
+    buf[0] = 0x00
+    buf[1] = 0x03
+    for i, b in enumerate(cmd_bytes):
+        buf[2 + i] = b
+    return buf
+
+
+def build_zone_packets(zone_level, zone_ids=ZONES_STANDARD):
+    """
+    Returns the sequence of 34-byte HID Feature reports for the given zone_level.
+    - zone_level == 0: 1 packet (Hardware Dim 100% -> LEDs cleanly off)
+    - zone_level in ZONE_LEVELS: 5 packets (Static White at calibrated intensity + Dim 0%)
+    """
+    num_zones = len(zone_ids)
+    if zone_level == 0:
+        return [build_packet((0x26, 100, 0x00, num_zones, *zone_ids))]
+
+    idx = ZONE_LEVELS.index(zone_level)
+    rgb = ZONE_RGB_BYTES[idx]
+    return [
+        build_packet((0x21, 0x00, 0x01, 0xFF, 0xFF, 0x00, 0x00)),
+        build_packet((0x23, 0x01, 0x00, num_zones, *zone_ids)),
+        build_packet((0x24, 0x00, 0x07, 0xD0, 0x00, 0xFA, rgb, rgb, rgb)),
+        build_packet((0x21, 0x00, 0x03, 0xFF, 0xFF, 0x00, 0x00)),
+        build_packet((0x26, 0x00, 0x00, num_zones, *zone_ids)),
+    ]
+
+
+def send_hid_packet(fd, pkt, delay=PACKET_DELAY_SEC):
+    fcntl.ioctl(fd, HIDIOCSFEATURE_34, pkt)
+    if delay > 0:
+        time.sleep(delay)
+    resp = bytearray(REPORT_SIZE)
+    fcntl.ioctl(fd, HIDIOCGFEATURE_34, resp)
+    return resp
+
+
+def detect_zone_ids(fd, delay=PACKET_DELAY_SEC):
+    try:
+        resp = send_hid_packet(fd, build_packet((0x20, 0x02)), delay=delay)
+        if resp[1] == 0x03:
+            platform_id = (resp[4] << 8) | resp[5]
+            if platform_id in ALT_ZONE_PLATFORMS:
+                return ZONES_ALT
+    except OSError:
+        pass
+    return ZONES_STANDARD
+
+
+def apply_zone_to_hardware(hidraw_path, zone_level, zone_ids=None, delay=PACKET_DELAY_SEC):
+    if not hidraw_path or not os.path.exists(hidraw_path):
+        return False, zone_ids
+
+    fd = -1
+    try:
+        fd = os.open(hidraw_path, os.O_RDWR)
+        if zone_ids is None:
+            zone_ids = detect_zone_ids(fd, delay=delay)
+        packets = build_zone_packets(zone_level, zone_ids)
+        for pkt in packets:
+            resp = send_hid_packet(fd, pkt, delay=delay)
+            if resp[1] != 0x03:
+                return False, zone_ids
+        return True, zone_ids
+    except OSError:
+        return False, zone_ids
+    finally:
+        if fd >= 0:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+
+def open_netlink_uevent_socket():
+    sock = socket.socket(socket.AF_NETLINK, socket.SOCK_DGRAM, NETLINK_KOBJECT_UEVENT)
+    sock.bind((0, 1))
+    sock.setblocking(False)
+    return sock
+
+
+def parse_relevant_uevent(raw_bytes):
+    """Returns 'backlight', 'hidraw', or None from a kernel uevent datagram."""
+    text = raw_bytes.decode("utf-8", errors="ignore")
+    if "SUBSYSTEM=backlight" in text or "SUBSYSTEM=drm" in text:
+        return "backlight"
+    if "SUBSYSTEM=hidraw" in text:
+        return "hidraw"
+    return None
+
+
+def run_daemon():
+    running = True
+
+    def handle_sig(_signum, _frame):
+        nonlocal running
+        running = False
+
+    signal.signal(signal.SIGTERM, handle_sig)
+    signal.signal(signal.SIGINT, handle_sig)
+
+    backlight_dir = resolve_backlight_dir()
+    hidraw_path = resolve_hidraw_dev()
+    zone_ids = None
+    current_zone = -1
+
+    # Initial sync on startup
+    perc, screen_on = read_screen_state(backlight_dir)
+    target = compute_target_zone(perc, screen_on, current_zone)
+    ok, zone_ids = apply_zone_to_hardware(hidraw_path, target, zone_ids)
+    if ok:
+        current_zone = target
+
+    sock = open_netlink_uevent_socket()
+    print(
+        f"Dell G15 Ambient Sync started (Direct HID: {hidraw_path or 'waiting'}, "
+        f"Backlight: {backlight_dir or 'default'})",
+        flush=True,
+    )
+
+    pending_sync = False
+    pending_rebind = False
+
+    try:
+        while running:
+            timeout = DEBOUNCE_SEC if (pending_sync or pending_rebind) else None
+            readable, _, _ = select.select([sock], [], [], timeout)
+
+            if readable:
+                while True:
+                    try:
+                        datagram = sock.recv(4096)
+                    except BlockingIOError:
+                        break
+                    kind = parse_relevant_uevent(datagram)
+                    if kind == "backlight":
+                        pending_sync = True
+                    elif kind == "hidraw":
+                        pending_rebind = True
+                        pending_sync = True
+                continue
+
+            # Debounce window elapsed: execute single consolidated hardware update
+            if pending_rebind or not hidraw_path:
+                hidraw_path = resolve_hidraw_dev()
+                zone_ids = None
+                current_zone = -1
+                pending_rebind = False
+
+            if pending_sync:
+                if not backlight_dir or not os.path.isdir(backlight_dir):
+                    backlight_dir = resolve_backlight_dir()
+                perc, screen_on = read_screen_state(backlight_dir)
+                target = compute_target_zone(perc, screen_on, current_zone)
+                if target != current_zone:
+                    ok, zone_ids = apply_zone_to_hardware(hidraw_path, target, zone_ids)
+                    if ok:
+                        current_zone = target
+                pending_sync = False
+    finally:
+        sock.close()
+
+
+if __name__ == "__main__":
+    sys.exit(run_daemon() or 0)

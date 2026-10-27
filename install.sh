@@ -1,70 +1,76 @@
 #!/bin/bash
 set -e
-# Installer for Dell G15 Power Sync (Simplified White LED Version)
+# Dell G15 Ambient Sync Installer (Direct HID + Netlink Architecture)
+# Compatible with Ubuntu/Debian and Fedora Workstation/Kinoite (Atomic)
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Localization
 LANG_CODE="${LANG%%_*}"
 if [ "$LANG_CODE" == "pt" ]; then
-    MSG_START="--- Dell G15 Power Sync Instalador (Simplificado) ---"
-    MSG_CHECK="-> Verificando dependências..."
-    MSG_ERROR="Erro: %s não está instalado. Por favor, instale-o primeiro."
-    MSG_STOP="-> Parando serviço existente..."
-    MSG_SCRIPTS="-> Script instalado em ~/.local/bin/"
-    MSG_SERVICE="-> Serviço Systemd criado"
-    MSG_UDEV="-> Instalando regras udev (requer sudo)..."
-    MSG_DONE="--------------------------------------\nInstalação completa! O daemon de LEDs brancos está rodando."
+    MSG_START="--- Dell G15 Ambient Sync Instalador ---"
+    MSG_CHECK="-> Verificando Python 3..."
+    MSG_ERROR="Erro: python3 não está instalado."
+    MSG_CLEAN="-> Limpando versões e serviços antigos (migração limpa)..."
+    MSG_SCRIPTS="-> Daemon instalado em ~/.local/bin/g15-daemon"
+    MSG_SERVICE="-> Serviço Systemd configurado em ~/.config/systemd/user/"
+    MSG_UDEV="-> Atualizando regras udev para acesso direto ao controlador HID (requer sudo)..."
+    MSG_DONE="--------------------------------------\nInstalação concluída! O Dell G15 Ambient Sync está ativo."
 else
-    MSG_START="--- Dell G15 Power Sync Installer (Simplified) ---"
-    MSG_CHECK="-> Checking dependencies..."
-    MSG_ERROR="Error: %s is not installed. Please install it first."
-    MSG_STOP="-> Stopping existing service..."
-    MSG_SCRIPTS="-> Script installed in ~/.local/bin/"
-    MSG_SERVICE="-> Systemd service created"
-    MSG_UDEV="-> Installing udev rules (requires sudo)..."
-    MSG_DONE="--------------------------------------\nInstallation complete! The white LED daemon is now running."
+    MSG_START="--- Dell G15 Ambient Sync Installer ---"
+    MSG_CHECK="-> Checking for Python 3..."
+    MSG_ERROR="Error: python3 is not installed."
+    MSG_CLEAN="-> Cleaning up legacy files and services (clean migration)..."
+    MSG_SCRIPTS="-> Daemon installed at ~/.local/bin/g15-daemon"
+    MSG_SERVICE="-> Systemd user service configured at ~/.config/systemd/user/"
+    MSG_UDEV="-> Updating udev rules for direct HID controller access (requires sudo)..."
+    MSG_DONE="--------------------------------------\nInstallation complete! Dell G15 Ambient Sync is now running."
 fi
 
 echo -e "$MSG_START"
 
-# 0. Check Dependencies
+# 1. Check Python 3
 echo "$MSG_CHECK"
-if ! command -v openrgb &> /dev/null; then
-    # shellcheck disable=SC2059
-    printf "$MSG_ERROR\n" "openrgb"
+if ! command -v python3 &> /dev/null; then
+    echo "$MSG_ERROR"
     exit 1
 fi
 
-# 1. Stop existing service if running
-if systemctl --user is-active --quiet dell-g15-daemon.service; then
-    echo "$MSG_STOP"
-    systemctl --user stop dell-g15-daemon.service
-fi
+# 2. Clean migration from any legacy version (v1-v5)
+echo "$MSG_CLEAN"
+systemctl --user stop dell-g15-daemon.service 2>/dev/null || true
+systemctl --user stop dell-g15-update.timer 2>/dev/null || true
+systemctl --user disable dell-g15-update.timer 2>/dev/null || true
+systemctl --user stop dell-g15-update.service 2>/dev/null || true
+systemctl --user disable dell-g15-update.service 2>/dev/null || true
 
-# 2. Install Script
+rm -f "$HOME/.config/systemd/user/dell-g15-update.timer"
+rm -f "$HOME/.config/systemd/user/dell-g15-update.service"
+rm -f "$HOME/.local/bin/g15-daemon.sh"
+rm -f "$HOME/.local/bin/g15-cycle.sh"
+rm -f "$HOME/.local/bin/g15-update.sh"
+
+# 3. Install new direct-HID daemon
 mkdir -p "$HOME/.local/bin"
-cp "$SCRIPT_DIR/bin/g15-daemon.sh" "$HOME/.local/bin/"
-chmod +x "$HOME/.local/bin/g15-daemon.sh"
+cp "$SCRIPT_DIR/bin/g15-daemon" "$HOME/.local/bin/g15-daemon"
+chmod +x "$HOME/.local/bin/g15-daemon"
 echo "$MSG_SCRIPTS"
 
-# 3. Setup Systemd Service
+# 4. Install Systemd User Service
 mkdir -p "$HOME/.config/systemd/user/"
 cp "$SCRIPT_DIR/systemd/dell-g15-daemon.service" "$HOME/.config/systemd/user/dell-g15-daemon.service"
 echo "$MSG_SERVICE"
 
-# 4. Udev Rules (For non-root hardware access)
-if [ ! -f "/etc/udev/rules.d/10-alienware.rules" ]; then
-    echo "$MSG_UDEV"
-    sudo cp "$SCRIPT_DIR/udev/10-alienware.rules" /etc/udev/rules.d/
-    sudo udevadm control --reload-rules
-    sudo udevadm trigger
-    # Load i2c-dev for stability
-    sudo modprobe i2c-dev
-    echo "i2c-dev" | sudo tee /etc/modules-load.d/i2c-dev.conf > /dev/null
+# 5. Udev Rules (Works on both standard Linux and immutable Fedora Kinoite /etc)
+if ! cmp -s "$SCRIPT_DIR/udev/10-alienware.rules" "/etc/udev/rules.d/10-alienware.rules"; then
+    if [ -t 0 ] || sudo -n true 2>/dev/null; then
+        echo "$MSG_UDEV"
+        sudo cp "$SCRIPT_DIR/udev/10-alienware.rules" /etc/udev/rules.d/10-alienware.rules
+        sudo udevadm control --reload-rules
+        sudo udevadm trigger --subsystem-match=hidraw --subsystem-match=usb
+    fi
 fi
 
-# 5. Reload and Start
+# 6. Reload and start daemon
 systemctl --user daemon-reload
 systemctl --user enable dell-g15-daemon.service
 systemctl --user restart dell-g15-daemon.service

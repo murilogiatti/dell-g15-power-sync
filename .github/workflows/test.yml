@@ -15,13 +15,13 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v5
 
-      - name: Install dependencies
+      - name: Install shellcheck
         run: |
           sudo apt-get update
-          sudo apt-get install -y shellcheck bats
+          sudo apt-get install -y shellcheck
 
-      - name: Run Shellcheck
-        run: shellcheck bin/g15-daemon.sh install.sh uninstall.sh update.sh
+      - name: Run Shellcheck on installer scripts
+        run: shellcheck install.sh uninstall.sh
 
-      - name: Run Bats Tests
-        run: bats tests/
+      - name: Run Python Unit Tests
+        run: python3 -m unittest discover -s tests -p "test_*.py" -v

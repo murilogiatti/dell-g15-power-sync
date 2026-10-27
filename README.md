@@ -1,11 +1,11 @@
 <div align="center">
   <h1>🌌 Dell G15 Ambient Sync</h1>
-  <p><i>A minimalist, elegant, and intelligent keyboard backlight synchronizer for Dell G15 laptops on Linux.</i></p>
-  
+  <p><i>Zero-dependency, event-driven keyboard backlight synchronizer for Dell G15 laptops on Linux.</i></p>
+
   [![CI](https://github.com/murilogiatti/dell-g15-power-sync/actions/workflows/test.yml/badge.svg)](https://github.com/murilogiatti/dell-g15-power-sync/actions/workflows/test.yml)
   [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
   ![Platform: Linux](https://img.shields.io/badge/Platform-Linux-blue.svg)
-  
+
   <p>
     <a href="#english">English</a> • <a href="#português">Português</a>
   </p>
@@ -15,44 +15,34 @@
 
 <h2 id="english">🇬🇧 English</h2>
 
-### The Concept
-Why manually adjust your keyboard backlight when your system can do it for you? 
-**Dell G15 Ambient Sync** is a lightweight, invisible daemon designed to seamlessly bridge your screen's brightness with your keyboard's illumination. 
+### Why This Exists
+Traditional scripts for the Dell G15 rely on `while true; sleep 2` polling loops and spawn the heavy `openrgb` CLI on every change—loading 40+ shared libraries and sending 34 redundant USB packets due to an unmapped zone count quirk on G15 controllers (`187c:0550` / `187c:0551`).
 
-It keeps your aesthetic clean and consistent by locking the LED color to a calibrated, pure white (`#E6E6E6`) and dynamically scaling its intensity across 5 carefully tuned levels based on your monitor's brightness. 
-
-*No bloated GUIs. No annoying popups. Just pure ambient harmony.*
+**Dell G15 Ambient Sync** is built from scratch with a clean, **Data-Oriented** architecture:
+- **Zero External Dependencies (No OpenRGB Required)**: Talks directly to the Alienware AW-ELC USB controller via Linux `/dev/hidraw*` (`HIDIOCSFEATURE` ioctls) using only the native Python 3 standard library. Updates all 4 keyboard zones in a single batch (~240ms instead of 3–19s).
+- **100% Event-Driven (Zero Polling)**: Listens directly to the Linux kernel's `AF_NETLINK` (`NETLINK_KOBJECT_UEVENT`) socket. Uses **0% CPU** and spawns zero child processes while idle, reacting instantaneously with a 150ms debounce when you adjust screen brightness.
+- **Immutable Distro Ready**: Works out of the box on **Fedora Kinoite / Silverblue (Atomic)** and **Ubuntu / Debian** without `rpm-ostree` package layering, Flatpaks, or `pip`.
 
 ### ✨ Features
-- **Pure White Aesthetic**: Locks the keyboard to a stable white. It caps the maximum brightness value at ~90% (`#E6E6E6`) instead of absolute `#FFFFFF` to prevent the hardware power limiter from dropping the brightness.
-- **Dynamic 5-Tier Sync**: Intelligently tracks your `amdgpu_bl2` (with automatic `amdgpu_bl*` fallback) screen brightness and maps it to five safe, visible zones:
-  - 🌙 0-20% Screen ➔ **10% Keyboard** *(Safe minimum to prevent controller lockups)*
-  - 🌘 21-40% Screen ➔ **30% Keyboard**
-  - 🌗 41-60% Screen ➔ **50% Keyboard**
-  - 🌔 61-80% Screen ➔ **75% Keyboard**
-  - 🌕 81-100% Screen ➔ **100% Keyboard**
-- **Zero Distractions**: Operates completely silently in the background as a user-level Systemd service.
+- **Calibrated Pure White (`#E6E6E6`)**: Caps peak white at `230` (`#E6E6E6`) instead of `#FFFFFF` to prevent the hardware power limiter from dropping brightness.
+- **Smart 5-Tier Sync + True Screen-Off**: Tracks `amdgpu_bl*` brightness with **±2% hysteresis** (preventing boundary flicker) and uses the native hardware dimmer (`0x26`) to cleanly turn off the LEDs when your screen blanks:
+  - 🌑 **Screen Off / 0%** ➔ **0% Keyboard** *(Hardware Dim 100% — LEDs off)*
+  - 🌙 **1–20% Screen** ➔ **10% Keyboard** (`#171717`)
+  - 🌘 **21–40% Screen** ➔ **30% Keyboard** (`#454545`)
+  - 🌗 **41–60% Screen** ➔ **50% Keyboard** (`#737373`)
+  - 🌔 **61–80% Screen** ➔ **75% Keyboard** (`#ACACAC`)
+  - 🌕 **81–100% Screen** ➔ **100% Keyboard** (`#E6E6E6`)
+- **Suspend/Resume Auto-Recovery**: Automatically detects USB `hidraw` re-enumeration on wake and restores your keyboard lighting.
 
-### 🛠️ Prerequisites
-- `openrgb` (must be installed and successfully detecting your Dell G Series LED Controller).
-- Supported environment: Ubuntu/Debian-based distributions (tested on Ubuntu 26.04).
-
-### 🚀 Installation
+### 🚀 Installation & Upgrade
+Running `./install.sh` automatically purges any legacy files/timers from older versions before installing:
 ```bash
 git clone https://github.com/murilogiatti/dell-g15-power-sync.git
 cd dell-g15-power-sync
 ./install.sh
 ```
-*Note: The installer will prompt for `sudo` if needed to configure Udev rules for OpenRGB hardware access.*
-
-### 🔄 Migrating from Legacy Versions
-If you used the older version of this script (the one with colored power profiles and desktop notifications), simply run the update script to cleanly purge the legacy files before installing the new minimalist version:
-```bash
-./update.sh
-```
 
 ### 🗑️ Uninstallation
-To completely remove the daemon and all its services:
 ```bash
 ./uninstall.sh
 ```
@@ -61,44 +51,34 @@ To completely remove the daemon and all its services:
 
 <h2 id="português">🇧🇷 Português</h2>
 
-### O Conceito
-Por que ajustar manualmente a luz do seu teclado quando o seu sistema pode fazer isso por você?
-O **Dell G15 Ambient Sync** é um daemon levíssimo e invisível, criado para sincronizar perfeitamente o brilho da sua tela com a iluminação do teclado.
+### Por Que Este Projeto Existe
+Scripts tradicionais para o Dell G15 usam loops de polling (`while true; sleep 2`) e invocam o binário pesado do `openrgb` a cada mudança — carregando mais de 40 bibliotecas dinâmicas e enviando 34 pacotes USB redundantes por conta de um bug de contagem de zonas nos controladores do G15 (`187c:0550` / `187c:0551`).
 
-Ele mantém sua estética limpa e consistente, fixando a cor dos LEDs em um branco puro calibrado (`#E6E6E6`) e ajustando dinamicamente a intensidade em 5 níveis cuidadosamente calibrados, acompanhando o brilho do seu monitor.
-
-*Sem interfaces pesadas. Sem notificações irritantes. Apenas harmonia de ambiente.*
+O **Dell G15 Ambient Sync** foi construído do zero com uma arquitetura limpa e orientada a dados (**DOD**):
+- **Zero Dependências Externas (Sem OpenRGB)**: Comunica-se diretamente com o controlador USB Alienware AW-ELC via `/dev/hidraw*` (`ioctl HIDIOCSFEATURE`) usando apenas a biblioteca padrão do Python 3. Atualiza as 4 zonas do teclado em um único lote (~240ms em vez de 3–19s).
+- **100% Orientado a Eventos (Zero Polling)**: Escuta diretamente o socket `AF_NETLINK` (`NETLINK_KOBJECT_UEVENT`) do kernel Linux. Consome **0% de CPU** e não cria processos filhos em repouso, reagindo instantaneamente (com debounce de 150ms) ao ajustar o brilho da tela.
+- **Pronto para Distros Imutáveis**: Funciona nativamente no **Fedora Kinoite / Silverblue (Atomic)** e no **Ubuntu / Debian** sem precisar de *package layering* (`rpm-ostree`), Flatpaks ou `pip`.
 
 ### ✨ Funcionalidades
-- **Estética Branco Puro**: Trava o teclado em um branco estável. O pico de brilho é inteligentemente limitado a ~90% (`#E6E6E6`) em vez do absoluto `#FFFFFF`, impedindo que o limitador de energia do hardware cause quedas repentinas de luminosidade.
-- **Sincronização Dinâmica em 5 Níveis**: Acompanha de forma inteligente o brilho da tela (`amdgpu_bl2`, com fallback automático para `amdgpu_bl*`) e mapeia para cinco zonas seguras:
-  - 🌙 0-20% Tela ➔ **10% Teclado** *(Mínimo seguro para evitar travamentos do controlador)*
-  - 🌘 21-40% Tela ➔ **30% Teclado**
-  - 🌗 41-60% Tela ➔ **50% Teclado**
-  - 🌔 61-80% Tela ➔ **75% Teclado**
-  - 🌕 81-100% Tela ➔ **100% Teclado**
-- **Zero Distrações**: Opera de forma totalmente silenciosa no plano de fundo como um serviço Systemd local.
+- **Branco Puro Calibrado (`#E6E6E6`)**: Limita o pico de branco em `230` (`#E6E6E6`) em vez de `#FFFFFF`, evitando quedas de tensão pelo limitador de energia do hardware.
+- **Sincronização em 5 Níveis + Desligamento Real**: Monitora o brilho da tela (`amdgpu_bl*`) com **histerese de ±2%** (evitando efeito pisca-pisca nas fronteiras) e usa o dimmer nativo de hardware (`0x26`) para apagar os LEDs com segurança quando o monitor desliga:
+  - 🌑 **Tela Apagada / 0%** ➔ **0% Teclado** *(Dimmer de Hardware em 100% — LEDs apagados)*
+  - 🌙 **1–20% Tela** ➔ **10% Teclado** (`#171717`)
+  - 🌘 **21–40% Tela** ➔ **30% Teclado** (`#454545`)
+  - 🌗 **41–60% Tela** ➔ **50% Teclado** (`#737373`)
+  - 🌔 **61–80% Tela** ➔ **75% Teclado** (`#ACACAC`)
+  - 🌕 **81–100% Tela** ➔ **100% Teclado** (`#E6E6E6`)
+- **Recuperação Automática Pós-Suspensão**: Detecta a reconexão USB `hidraw` ao acordar o notebook e restaura a iluminação automaticamente.
 
-### 🛠️ Pré-requisitos
-- `openrgb` (deve estar instalado e detectando com sucesso o Controlador de LED Dell G Series).
-- Ambiente suportado: Distribuições baseadas em Ubuntu/Debian (testado no Ubuntu 26.04).
-
-### 🚀 Instalação
+### 🚀 Instalação e Atualização
+O comando `./install.sh` limpa automaticamente quaisquer arquivos ou serviços de versões antigas antes de instalar:
 ```bash
 git clone https://github.com/murilogiatti/dell-g15-power-sync.git
 cd dell-g15-power-sync
 ./install.sh
 ```
-*Nota: O instalador solicitará `sudo` se necessário para configurar as regras do Udev e garantir o acesso do OpenRGB ao hardware.*
-
-### 🔄 Atualizando da Versão Antiga (Legada)
-Se você utilizava a versão mais antiga deste script (aquela com perfis de energia coloridos e notificações na área de trabalho), basta rodar o script de atualização para limpar completamente os arquivos antigos antes de instalar a nova versão minimalista:
-```bash
-./update.sh
-```
 
 ### 🗑️ Desinstalação
-Para remover completamente o daemon e todos os seus serviços:
 ```bash
 ./uninstall.sh
 ```
