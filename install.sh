@@ -11,7 +11,7 @@ if [ "$LANG_CODE" == "pt" ]; then
     MSG_CHECK="-> Verificando Python 3..."
     MSG_ERROR="Erro: python3 não está instalado."
     MSG_CLEAN="-> Limpando versões e serviços antigos (migração limpa)..."
-    MSG_SCRIPTS="-> Binários instalados em ~/.local/bin/ (g15-daemon e g15-tray)"
+    MSG_SCRIPTS="-> Binários e ícones instalados em ~/.local/"
     MSG_SERVICE="-> Serviços Systemd e atalho de aplicativo configurados"
     MSG_UDEV="-> Atualizando regras udev para acesso direto ao controlador HID (requer sudo)..."
     MSG_DONE="--------------------------------------\nInstalação concluída! O daemon e o ícone na barra superior estão ativos."
@@ -20,7 +20,7 @@ else
     MSG_CHECK="-> Checking for Python 3..."
     MSG_ERROR="Error: python3 is not installed."
     MSG_CLEAN="-> Cleaning up legacy files and services (clean migration)..."
-    MSG_SCRIPTS="-> Binaries installed at ~/.local/bin/ (g15-daemon and g15-tray)"
+    MSG_SCRIPTS="-> Binaries and icons installed in ~/.local/"
     MSG_SERVICE="-> Systemd user services and desktop shortcut configured"
     MSG_UDEV="-> Updating udev rules for direct HID controller access (requires sudo)..."
     MSG_DONE="--------------------------------------\nInstallation complete! Daemon and top-bar tray indicator are now active."
@@ -50,11 +50,23 @@ rm -f "$HOME/.local/bin/g15-daemon.sh"
 rm -f "$HOME/.local/bin/g15-cycle.sh"
 rm -f "$HOME/.local/bin/g15-update.sh"
 
-# 3. Install direct-HID daemon and tray indicator / control panel
+# 3. Install direct-HID daemon, tray indicator, and visual assets/icons
 mkdir -p "$HOME/.local/bin"
 cp "$SCRIPT_DIR/bin/g15-daemon" "$HOME/.local/bin/g15-daemon"
 cp "$SCRIPT_DIR/bin/g15-tray" "$HOME/.local/bin/g15-tray"
 chmod +x "$HOME/.local/bin/g15-daemon" "$HOME/.local/bin/g15-tray"
+
+mkdir -p "$HOME/.local/share/dell-g15"
+cp "$SCRIPT_DIR/assets/"* "$HOME/.local/share/dell-g15/"
+
+mkdir -p "$HOME/.local/share/icons/hicolor/scalable/apps"
+mkdir -p "$HOME/.local/share/icons/hicolor/256x256/apps"
+mkdir -p "$HOME/.local/share/icons/hicolor/scalable/status"
+mkdir -p "$HOME/.local/share/icons/hicolor/64x64/status"
+cp "$SCRIPT_DIR/assets/logo.svg" "$HOME/.local/share/icons/hicolor/scalable/apps/dell-g15-control.svg"
+cp "$SCRIPT_DIR/assets/logo.png" "$HOME/.local/share/icons/hicolor/256x256/apps/dell-g15-control.png"
+cp "$SCRIPT_DIR/assets/tray-icon.svg" "$HOME/.local/share/icons/hicolor/scalable/status/tray-icon.svg"
+cp "$SCRIPT_DIR/assets/tray-icon.png" "$HOME/.local/share/icons/hicolor/64x64/status/tray-icon.png"
 echo "$MSG_SCRIPTS"
 
 # 4. Install Systemd User Services & Desktop Launcher
@@ -69,7 +81,7 @@ Name=Dell G15 Control Center
 Comment=Configure Dell G15 4-Zone RGB, Ambient Sync, Effects and Power Profiles
 Comment[pt]=Configurar Zonas RGB, Brilho Automático, Efeitos e Energia do Dell G15
 Exec=$HOME/.local/bin/g15-tray --show
-Icon=input-keyboard
+Icon=$HOME/.local/share/icons/hicolor/scalable/apps/dell-g15-control.svg
 Terminal=false
 Type=Application
 Categories=Settings;HardwareSettings;GTK;

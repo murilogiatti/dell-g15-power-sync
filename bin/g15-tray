@@ -19,11 +19,19 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Adw, Gdk, Gio, GLib, Gtk  # noqa: E402
 
-# --- Configuration Paths & Defaults ---
+# --- Configuration & Asset Paths ---
 CONFIG_DIR = os.path.join(
     os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config")), "dell-g15"
 )
 CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
+
+DATA_DIR = os.path.join(
+    os.environ.get("XDG_DATA_HOME", os.path.expanduser("~/.local/share")), "dell-g15"
+)
+REPO_ASSETS_DIR = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "assets")
+)
+ASSETS_DIR = DATA_DIR if os.path.isdir(DATA_DIR) else REPO_ASSETS_DIR
 
 DEFAULT_CONFIG = {
     "sync_screen": True,
@@ -161,6 +169,10 @@ def read_telemetry():
                 except (OSError, ValueError):
                     pass
     return data
+
+
+def format_telemetry_label(t):
+    return f"🌡️ CPU {t['cpu_c']}°C | GPU {t['gpu_c']}°C | 💨 {t['fan1_rpm']}/{t['fan2_rpm']} RPM"
 
 
 def get_power_profile():
@@ -334,6 +346,7 @@ class G15ControlApp(Adw.Application):
         self.menu_revision = 1
         self.menu_actions = {}
         self.menu_items_flat = {}
+        self.menu_nodes = {}
         self.window = None
         self._updating_ui = False
         self._sni_reg_id = 0
@@ -345,7 +358,13 @@ class G15ControlApp(Adw.Application):
         Adw.Application.do_startup(self)
         style_mgr = Adw.StyleManager.get_default()
         style_mgr.set_color_scheme(Adw.ColorScheme.PREFER_DARK)
+        display = Gdk.Display.get_default()
+        if display:
+            icon_theme = Gtk.IconTheme.get_for_display(display)
+            if os.path.isdir(ASSETS_DIR):
+                icon_theme.add_search_path(ASSETS_DIR)
         self.hold()
+        self._rebuild_menu_model()
         self._setup_dbus_tray()
         self._setup_config_monitor()
         GLib.timeout_add_seconds(3, self._on_telemetry_tick)
@@ -355,7 +374,6 @@ class G15ControlApp(Adw.Application):
         if "--show" in args or not self.start_hidden:
             self.present_control_window()
         else:
-            # First background invocation
             self.start_hidden = False
         return 0
 
@@ -377,15 +395,36 @@ class G15ControlApp(Adw.Application):
             Gio.FileMonitorEvent.CREATED,
             Gio.FileMonitorEvent.CHANGED,
         ):
-            self.cfg = load_config()
-            self._notify_menu_updated()
-            self._sync_window_from_config()
+            new_cfg = load_config()
+            if new_cfg != self.cfg:
+                self.cfg = new_cfg
+                self._notify_menu_updated()
+                self._sync_window_from_config()
 
     def _on_telemetry_tick(self):
+        old_lbl = format_telemetry_label(self.telemetry)
         self.telemetry = read_telemetry()
+        new_lbl = format_telemetry_label(self.telemetry)
         self.active_power_profile = get_power_profile()
         self._update_window_telemetry()
+        if new_lbl != old_lbl and 1 in self.menu_items_flat:
+            self.menu_items_flat[1]["label"] = GLib.Variant("s", new_lbl)
+            self._emit_item_prop_updated(1, {"label": GLib.Variant("s", new_lbl)})
         return True
+
+    def _emit_item_prop_updated(self, item_id, changed_props):
+        if not self._bus:
+            return
+        try:
+            self._bus.emit_signal(
+                None,
+                MENU_PATH,
+                "com.canonical.dbusmenu",
+                "ItemsPropertiesUpdated",
+                GLib.Variant("(a(ia{sv})a(ias))", ([(item_id, changed_props)], [])),
+            )
+        except Exception:
+            pass
 
     # --- StatusNotifierItem & Dbusmenu Implementation ---
     def _setup_dbus_tray(self):
@@ -443,6 +482,9 @@ class G15ControlApp(Adw.Application):
     def _current_icon_name(self):
         if not self.cfg.get("sync_screen", True) and int(self.cfg.get("manual_brightness", 100)) == 0:
             return "keyboard-brightness-symbolic"
+        custom_svg = os.path.join(ASSETS_DIR, "tray-icon.svg")
+        if os.path.exists(custom_svg):
+            return "tray-icon"
         return "input-keyboard-symbolic"
 
     def _on_sni_get_property(self, _conn, _sender, _path, _iface, prop):
@@ -460,7 +502,9 @@ class G15ControlApp(Adw.Application):
             return GLib.Variant("s", self._current_icon_name())
         if prop == "IconAccessibleDesc":
             return GLib.Variant("s", "Dell G15 Control")
-        if prop in ("AttentionIconName", "AttentionAccessibleDesc", "IconThemePath", "XAyatanaLabel", "XAyatanaLabelGuide"):
+        if prop == "IconThemePath":
+            return GLib.Variant("s", ASSETS_DIR if os.path.isdir(ASSETS_DIR) else "")
+        if prop in ("AttentionIconName", "AttentionAccessibleDesc", "XAyatanaLabel", "XAyatanaLabelGuide"):
             return GLib.Variant("s", "")
         if prop == "XAyatanaOrderingIndex":
             return GLib.Variant("u", 0)
@@ -476,7 +520,7 @@ class G15ControlApp(Adw.Application):
             )
             return GLib.Variant(
                 "(sa(iiay)ss)",
-                ("input-keyboard-symbolic", [], "Dell G15 Ambient Sync", sub),
+                (self._current_icon_name(), [], "Dell G15 Ambient Sync", sub),
             )
         return None
 
@@ -512,66 +556,63 @@ class G15ControlApp(Adw.Application):
         self._notify_menu_updated()
         self._sync_window_from_config()
 
-    # --- Dynamic Dbusmenu Layout Builder ---
-    def _build_menu_tree(self):
+    # --- Dynamic Dbusmenu Model & Subtree Serializer ---
+    def _rebuild_menu_model(self):
         self.menu_actions.clear()
         self.menu_items_flat.clear()
-        items = []
+        self.menu_nodes.clear()
+        root_children_ids = []
 
-        def add_item(item_id, props, action=None, children=None):
+        def register_node(item_id, props, action=None, child_ids=None):
             p = {"enabled": GLib.Variant("b", True), "visible": GLib.Variant("b", True)}
             p.update(props)
             if action is not None:
                 self.menu_actions[item_id] = action
-            ch = children or []
-            if ch:
+            c_ids = list(child_ids or [])
+            if c_ids:
                 p["children-display"] = GLib.Variant("s", "submenu")
             self.menu_items_flat[item_id] = p
-            node = GLib.Variant("(ia{sv}av)", (item_id, p, ch))
-            return node
+            self.menu_nodes[item_id] = (item_id, p, c_ids)
+            return item_id
 
-        def add_sep(item_id):
-            return add_item(item_id, {"type": GLib.Variant("s", "separator")})
+        def register_sep(item_id):
+            return register_node(item_id, {"type": GLib.Variant("s", "separator")})
 
         # 1. Telemetry Header (disabled informational item)
-        t = self.telemetry
-        items.append(
-            add_item(
+        root_children_ids.append(
+            register_node(
                 1,
                 {
-                    "label": GLib.Variant(
-                        "s",
-                        f"🌡️ CPU {t['cpu_c']}°C | GPU {t['gpu_c']}°C | 💨 {t['fan1_rpm']}/{t['fan2_rpm']} RPM",
-                    ),
+                    "label": GLib.Variant("s", format_telemetry_label(self.telemetry)),
                     "enabled": GLib.Variant("b", False),
                 },
             )
         )
 
         # 2. Open Control Panel Window
-        items.append(
-            add_item(
+        root_children_ids.append(
+            register_node(
                 2,
                 {
                     "label": GLib.Variant(
                         "s",
                         tr(
-                            "🎛️ Abrir Painel de Zonas & RGB...",
-                            "🎛️ Open Zones & RGB Control Panel...",
+                            "🎛️ Abrir Painel de Zonas e RGB...",
+                            "🎛️ Open Zones and RGB Control Panel...",
                         ),
                     )
                 },
                 action=self.present_control_window,
             )
         )
-        items.append(add_sep(3))
+        root_children_ids.append(register_sep(3))
 
         # 3. Ambient Sync + Manual Brightness Radio Group
         sync_on = bool(self.cfg.get("sync_screen", True))
         manual_val = int(self.cfg.get("manual_brightness", 100))
 
-        items.append(
-            add_item(
+        root_children_ids.append(
+            register_node(
                 10,
                 {
                     "label": GLib.Variant(
@@ -595,8 +636,8 @@ class G15ControlApp(Adw.Application):
             else:
                 lbl = tr(f"🔆 Brilho Fixo: {step}%", f"🔆 Fixed Brightness: {step}%")
             checked = (not sync_on) and (manual_val == step)
-            items.append(
-                add_item(
+            root_children_ids.append(
+                register_node(
                     item_id,
                     {
                         "label": GLib.Variant("s", lbl),
@@ -607,17 +648,17 @@ class G15ControlApp(Adw.Application):
                 )
             )
 
-        items.append(add_sep(20))
+        root_children_ids.append(register_sep(20))
 
         # 4. Quick Color Presets Submenu
         cur_hex = str(self.cfg.get("zones_rgb", ["E6E6E6"])[0]).upper()
         cur_per_zone = bool(self.cfg.get("per_zone", False))
-        color_children = []
+        color_child_ids = []
         for idx, (_code, hex_val, lbl_pt, lbl_en) in enumerate(COLOR_PRESETS):
             cid = 31 + idx
             is_sel = (not cur_per_zone) and (cur_hex == hex_val)
-            color_children.append(
-                add_item(
+            color_child_ids.append(
+                register_node(
                     cid,
                     {
                         "label": GLib.Variant("s", tr(lbl_pt, lbl_en)),
@@ -627,21 +668,21 @@ class G15ControlApp(Adw.Application):
                     action=lambda h=hex_val: self._apply_quick_color(h),
                 )
             )
-        items.append(
-            add_item(
+        root_children_ids.append(
+            register_node(
                 30,
                 {"label": GLib.Variant("s", tr("🎨 Cores Rápidas (RGB)", "🎨 Quick Colors (RGB)"))},
-                children=color_children,
+                child_ids=color_child_ids,
             )
         )
 
         # 5. Hardware Effects Submenu
         cur_mode = str(self.cfg.get("mode", "static")).lower()
-        effect_children = []
+        effect_child_ids = []
         for idx, (m_key, lbl_pt, lbl_en) in enumerate(EFFECT_MODES):
             eid = 41 + idx
-            effect_children.append(
-                add_item(
+            effect_child_ids.append(
+                register_node(
                     eid,
                     {
                         "label": GLib.Variant("s", tr(lbl_pt, lbl_en)),
@@ -651,24 +692,24 @@ class G15ControlApp(Adw.Application):
                     action=lambda m=m_key: self._apply_quick_mode(m),
                 )
             )
-        items.append(
-            add_item(
+        root_children_ids.append(
+            register_node(
                 40,
                 {
                     "label": GLib.Variant(
                         "s", tr("✨ Efeitos do Teclado", "✨ Keyboard Effects")
                     )
                 },
-                children=effect_children,
+                child_ids=effect_child_ids,
             )
         )
 
         # 6. Power Profiles Submenu
-        power_children = []
+        power_child_ids = []
         for idx, (prof_id, lbl_pt, lbl_en) in enumerate(POWER_PROFILES):
             pid = 51 + idx
-            power_children.append(
-                add_item(
+            power_child_ids.append(
+                register_node(
                     pid,
                     {
                         "label": GLib.Variant("s", tr(lbl_pt, lbl_en)),
@@ -680,30 +721,30 @@ class G15ControlApp(Adw.Application):
                     action=lambda p=prof_id: self._apply_power_profile(p),
                 )
             )
-        items.append(
-            add_item(
+        root_children_ids.append(
+            register_node(
                 50,
                 {
                     "label": GLib.Variant(
                         "s", tr("⚡ Perfil de Energia", "⚡ Power Profile")
                     )
                 },
-                children=power_children,
+                child_ids=power_child_ids,
             )
         )
 
-        items.append(add_sep(60))
+        root_children_ids.append(register_sep(60))
 
-        # 7. Save to Boot EEPROM
-        items.append(
-            add_item(
+        # 7. Save to Keyboard Boot Memory (EEPROM 0x0061)
+        root_children_ids.append(
+            register_node(
                 61,
                 {
                     "label": GLib.Variant(
                         "s",
                         tr(
-                            "💾 Salvar Padrão no Boot (BIOS)",
-                            "💾 Save as Boot Default (BIOS)",
+                            "💾 Salvar na Memória do Teclado (Boot)",
+                            "💾 Save to Keyboard Memory (Boot)",
                         ),
                     )
                 },
@@ -713,7 +754,21 @@ class G15ControlApp(Adw.Application):
 
         root_props = {"children-display": GLib.Variant("s", "submenu")}
         self.menu_items_flat[0] = root_props
-        return (0, root_props, items)
+        self.menu_nodes[0] = (0, root_props, root_children_ids)
+
+    def _serialize_layout_node(self, node_id, depth):
+        if not self.menu_nodes:
+            self._rebuild_menu_model()
+        nid, props, child_ids = self.menu_nodes.get(node_id, self.menu_nodes[0])
+        if depth == 0 or not child_ids:
+            return (nid, props, [])
+        next_depth = depth - 1 if depth > 0 else -1
+        children_variants = [
+            GLib.Variant("(ia{sv}av)", self._serialize_layout_node(cid, next_depth))
+            for cid in child_ids
+            if cid in self.menu_nodes
+        ]
+        return (nid, props, children_variants)
 
     def _set_sync_or_manual(self, sync_screen, manual_brightness):
         self.cfg["sync_screen"] = bool(sync_screen)
@@ -749,13 +804,14 @@ class G15ControlApp(Adw.Application):
         if self.window and hasattr(self, "_toast_overlay"):
             toast = Adw.Toast.new(
                 tr(
-                    "Perfil gravado na memória de boot (EEPROM 0x0061)!",
-                    "Profile saved to boot EEPROM (slot 0x0061)!",
+                    "Perfil gravado na memória interna do teclado (slot 0x0061)!",
+                    "Profile saved to onboard keyboard memory (slot 0x0061)!",
                 )
             )
             self._toast_overlay.add_toast(toast)
 
     def _notify_menu_updated(self):
+        self._rebuild_menu_model()
         self.menu_revision += 1
         if not self._bus:
             return
@@ -785,19 +841,20 @@ class G15ControlApp(Adw.Application):
         if prop == "Status":
             return GLib.Variant("s", "normal")
         if prop == "IconThemePath":
-            return GLib.Variant("as", [])
+            return GLib.Variant("as", [ASSETS_DIR] if os.path.isdir(ASSETS_DIR) else [])
         return None
 
     def _on_menu_method_call(self, _conn, _sender, _path, _iface, method, params, invocation):
         if method == "GetLayout":
-            self.telemetry = read_telemetry()
-            self.active_power_profile = get_power_profile()
-            tree = self._build_menu_tree()
+            parent_id, recursion_depth, _prop_names = params.unpack()
+            if not self.menu_nodes:
+                self._rebuild_menu_model()
+            tree = self._serialize_layout_node(parent_id, recursion_depth)
             invocation.return_value(GLib.Variant("(u(ia{sv}av))", (self.menu_revision, tree)))
         elif method == "GetGroupProperties":
             ids, _prop_names = params.unpack()
             if not self.menu_items_flat:
-                self._build_menu_tree()
+                self._rebuild_menu_model()
             res = []
             for i in ids:
                 if i in self.menu_items_flat:
@@ -806,7 +863,7 @@ class G15ControlApp(Adw.Application):
         elif method == "GetProperty":
             item_id, prop_name = params.unpack()
             if not self.menu_items_flat:
-                self._build_menu_tree()
+                self._rebuild_menu_model()
             val = self.menu_items_flat.get(item_id, {}).get(
                 prop_name, GLib.Variant("s", "")
             )
@@ -823,14 +880,9 @@ class G15ControlApp(Adw.Application):
                     GLib.idle_add(self._invoke_menu_action, item_id)
             invocation.return_value(GLib.Variant("(ai)", ([],)))
         elif method == "AboutToShow":
-            self.telemetry = read_telemetry()
-            self.active_power_profile = get_power_profile()
-            self._build_menu_tree()
-            invocation.return_value(GLib.Variant("(b)", (True,)))
+            # Returning False prevents GNOME AppIndicator from tearing down open submenus
+            invocation.return_value(GLib.Variant("(b)", (False,)))
         elif method == "AboutToShowGroup":
-            self.telemetry = read_telemetry()
-            self.active_power_profile = get_power_profile()
-            self._build_menu_tree()
             invocation.return_value(GLib.Variant("(aiai)", ([], [])))
         else:
             invocation.return_value(None)
@@ -852,7 +904,8 @@ class G15ControlApp(Adw.Application):
     def _build_control_window(self):
         self.window = Adw.ApplicationWindow(application=self)
         self.window.set_title(tr("Dell G15 Control Center", "Dell G15 Control Center"))
-        self.window.set_default_size(640, 760)
+        self.window.set_icon_name("dell-g15-control")
+        self.window.set_default_size(650, 820)
         self.window.connect("close-request", self._on_window_close_request)
 
         self._toast_overlay = Adw.ToastOverlay()
@@ -861,6 +914,43 @@ class G15ControlApp(Adw.Application):
         toolbar_view.add_top_bar(header)
 
         page = Adw.PreferencesPage()
+
+        # --- Brand Hero Header Group ---
+        grp_hero = Adw.PreferencesGroup()
+        hero_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=16)
+        hero_box.set_margin_top(6)
+        hero_box.set_margin_bottom(6)
+        hero_box.set_margin_start(12)
+        hero_box.set_margin_end(12)
+
+        logo_path = os.path.join(ASSETS_DIR, "logo.svg")
+        if os.path.exists(logo_path):
+            logo_img = Gtk.Image.new_from_file(logo_path)
+            logo_img.set_pixel_size(64)
+            hero_box.append(logo_img)
+
+        title_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        title_box.set_valign(Gtk.Align.CENTER)
+        lbl_main = Gtk.Label(
+            label="Dell G15 Ambient Sync & Control Center", xalign=0
+        )
+        lbl_main.add_css_class("title-2")
+        lbl_sub = Gtk.Label(
+            label=tr(
+                "Controlador USB HID Direto (187c:0550) • RGB de 4 Zonas • Sincronização com a Tela",
+                "Direct USB HID Controller (187c:0550) • 4-Zone RGB • Screen Brightness Sync",
+            ),
+            xalign=0,
+        )
+        lbl_sub.add_css_class("dim-label")
+        title_box.append(lbl_main)
+        title_box.append(lbl_sub)
+        hero_box.append(title_box)
+
+        row_hero = Adw.PreferencesRow(activatable=False)
+        row_hero.set_child(hero_box)
+        grp_hero.add(row_hero)
+        page.add(grp_hero)
 
         # --- Group 1: Brightness & Ambient Sync ---
         grp_bright = Adw.PreferencesGroup(
@@ -896,7 +986,10 @@ class G15ControlApp(Adw.Application):
         grp_bright.add(self._row_manual)
 
         self._row_power_cap = Adw.SwitchRow(
-            title=tr("Proteção do Limitador de Energia (Cap 230)", "Hardware Power Limiter Guard (Cap 230)"),
+            title=tr(
+                "Proteção do Limitador de Energia (Cap 230)",
+                "Hardware Power Limiter Guard (Cap 230)",
+            ),
             subtitle=tr(
                 "Limita o pico RGB em #E6E6E6 para evitar corte de brilho no controlador",
                 "Caps RGB peak at #E6E6E6 to prevent controller power-drop dimming",
@@ -916,7 +1009,10 @@ class G15ControlApp(Adw.Application):
         )
 
         self._row_per_zone = Adw.SwitchRow(
-            title=tr("Controle Individual por Zona (4 Zonas)", "Independent Per-Zone Control (4 Zones)"),
+            title=tr(
+                "Controle Individual por Zona (4 Zonas)",
+                "Independent Per-Zone Control (4 Zones)",
+            ),
             subtitle=tr(
                 "Desative para aplicar a Cor da Zona 1 em todo o teclado",
                 "Disable to apply Zone 1 color uniformly across the entire keyboard",
@@ -991,9 +1087,12 @@ class G15ControlApp(Adw.Application):
         grp_zones.add(row_presets)
         page.add(grp_zones)
 
-        # --- Group 3: Hardware Effects & Boot EEPROM ---
+        # --- Group 3: Hardware Effects & Onboard Keyboard Memory ---
         grp_fx = Adw.PreferencesGroup(
-            title=tr("Efeitos Nativos de Hardware e Memória Boot", "Onboard Hardware Effects and Boot Memory"),
+            title=tr(
+                "Efeitos Nativos de Hardware e Memória do Teclado",
+                "Onboard Hardware Effects and Keyboard Memory",
+            ),
             description=tr(
                 "Animações executadas diretamente pelo chip AW-ELC (0% de uso de CPU).",
                 "Animations executed directly by the onboard AW-ELC controller (0% CPU usage).",
@@ -1002,7 +1101,10 @@ class G15ControlApp(Adw.Application):
 
         self._row_mode = Adw.ComboRow(
             title=tr("Modo de Iluminação", "Lighting Effect Mode"),
-            subtitle=tr("Processado nativamente pelo firmware 187c:0550", "Natively processed by 187c:0550 firmware"),
+            subtitle=tr(
+                "Processado nativamente pelo firmware 187c:0550",
+                "Natively processed by 187c:0550 firmware",
+            ),
         )
         mode_strings = Gtk.StringList.new([tr(pt, en) for _k, pt, en in EFFECT_MODES])
         self._row_mode.set_model(mode_strings)
@@ -1021,13 +1123,16 @@ class G15ControlApp(Adw.Application):
         grp_fx.add(self._row_speed)
 
         row_boot = Adw.ActionRow(
-            title=tr("Gravar Padrão na BIOS / Boot (Slot 0x0061)", "Save Default to BIOS / Boot (Slot 0x0061)"),
+            title=tr(
+                "Gravar na Memória Interna do Teclado (Boot)",
+                "Save to Onboard Keyboard Memory (Boot)",
+            ),
             subtitle=tr(
-                "Mantém a cor e efeito atuais mesmo antes do sistema operacional iniciar",
-                "Keeps current color and effect active during BIOS post and boot",
+                "Salva no chip de LEDs do teclado (slot 0x0061) para ligar já na cor escolhida",
+                "Saves to the keyboard LED controller (slot 0x0061) so it powers on with your color",
             ),
         )
-        btn_boot = Gtk.Button(label=tr("💾 Salvar no Boot", "💾 Save to Boot"))
+        btn_boot = Gtk.Button(label=tr("💾 Salvar no Teclado", "💾 Save to Keyboard"))
         btn_boot.set_valign(Gtk.Align.CENTER)
         btn_boot.add_css_class("suggested-action")
         btn_boot.connect("clicked", lambda _b: self._trigger_save_boot())
@@ -1057,8 +1162,11 @@ class G15ControlApp(Adw.Application):
         grp_hw.add(self._row_fans)
 
         self._row_power = Adw.ComboRow(
-            title=tr("Perfil Térmico e de Energia", "Thermal & Power Profile"),
-            subtitle=tr("Integrado via UPower / power-profiles-daemon", "Integrated via UPower / power-profiles-daemon"),
+            title=tr("Perfil Térmico e de Energia", "Thermal and Power Profile"),
+            subtitle=tr(
+                "Integrado via UPower / power-profiles-daemon",
+                "Integrated via UPower / power-profiles-daemon",
+            ),
         )
         power_strings = Gtk.StringList.new([tr(pt, en) for _k, pt, en in POWER_PROFILES])
         self._row_power.set_model(power_strings)

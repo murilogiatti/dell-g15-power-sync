@@ -1,7 +1,6 @@
 <div align="center">
-  <h1>🌌 Dell G15 Ambient Sync & Control Center</h1>
-  <p><i>Zero-dependency keyboard backlight synchronizer, 4-zone RGB controller, and top-bar tray widget for Dell G15 laptops on Linux.</i></p>
-  <p><i>Sincronizador de iluminação de teclado, controlador RGB de 4 zonas e widget na barra superior para Dell G15 no Linux.</i></p>
+  <img src="assets/banner.svg" alt="Dell G15 Ambient Sync & Control Center Banner" width="100%"/>
+  <br/><br/>
 
   [![CI](https://github.com/murilogiatti/dell-g15-power-sync/actions/workflows/test.yml/badge.svg)](https://github.com/murilogiatti/dell-g15-power-sync/actions/workflows/test.yml)
   [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -17,6 +16,8 @@
 <h2 id="english">🇺🇸 English (EN-US)</h2>
 
 ### Overview
+<img src="assets/logo.svg" alt="Dell G15 Logo" width="110" align="right"/>
+
 **Dell G15 Ambient Sync & Control Center** combines an ultra-lightweight, event-driven hardware daemon (`g15-daemon`) with a native **Top-Bar System Tray Indicator + GTK4/Libadwaita Control Center** (`g15-tray`).
 
 Built from scratch with a clean **Data-Oriented Design (DOD)** architecture, it eliminates polling loops (`sleep`) and heavy third-party CLI tools (`openrgb`):
@@ -28,7 +29,7 @@ Built from scratch with a clean **Data-Oriented Design (DOD)** architecture, it 
 - **GTK4 + Libadwaita Control Center (`g15-tray --show`)**:
   - **Unified or Independent 4-Zone RGB**: Customize all 4 keyboard zones (`Left/WASD`, `Center-Left`, `Center-Right`, `NumPad`) independently or uniformly with full RGB color pickers.
   - **Onboard Hardware Effects (0% CPU)**: Trigger native AW-ELC chip animations (`Static`, `Breathing`, `Pulse`, `Two-Color Morph`, `Spectrum Cycle`, `Rainbow Wave`) with adjustable tempo (`20–250`).
-  - **BIOS / Boot EEPROM Persistence**: Save your favorite lighting profile directly to hardware slot `0x0061` so your keyboard boots with your chosen color before the OS loads.
+  - **Onboard Keyboard Memory (Boot Persistence)**: Save your favorite lighting profile directly to the keyboard microcontroller's internal user slot (`0x0061`) so your keyboard powers on with your chosen color before the OS loads.
 - **Ready for Standard & Immutable Distros**: Works out of the box on **Ubuntu / Debian** and **Fedora Workstation / Kinoite / Silverblue (Atomic)** without `rpm-ostree` package layering, Flatpaks, or `pip` packages.
 
 ### ✨ Smart 5-Tier Ambient Sync + Hysteresis (±2%)
@@ -62,6 +63,8 @@ To open the graphical Control Center at any time from the terminal or applicatio
 <h2 id="português">🇧🇷 Português (PT-BR)</h2>
 
 ### Visão Geral
+<img src="assets/logo.svg" alt="Dell G15 Logo" width="110" align="right"/>
+
 O **Dell G15 Ambient Sync & Control Center** une um daemon de hardware ultraleve orientado a eventos (`g15-daemon`) a um **Indicador na Barra de Notificações Superior + Painel de Controle GTK4/Libadwaita** (`g15-tray`).
 
 Construído do zero com arquitetura **Data-Oriented Design (DOD)**, ele elimina loops de polling (`sleep`) e a dependência de ferramentas externas pesadas (`openrgb`):
@@ -73,7 +76,7 @@ Construído do zero com arquitetura **Data-Oriented Design (DOD)**, ele elimina 
 - **Painel de Controle GTK4 + Libadwaita (`g15-tray --show`)**:
   - **Controle RGB Unificado ou por Zona (4 Zonas)**: Personalize as 4 zonas do teclado (`Esquerda/WASD`, `Centro-Esquerda`, `Centro-Direita`, `NumPad`) individualmente ou em conjunto com seletores de cor RGB.
   - **Efeitos Nativos de Hardware (0% CPU)**: Acione animações processadas pelo próprio chip AW-ELC (`Estático`, `Respiração`, `Pulso`, `Transição 2 Cores / Morph`, `Ciclo Spectrum`, `Ondas Arco-Íris / Rainbow`) com controle de velocidade (`20–250`).
-  - **Gravação na Memória de Boot (BIOS / EEPROM)**: Salve sua cor e efeito favoritos diretamente no slot de boot `0x0061` para que o teclado já ligue configurado antes mesmo do Linux iniciar.
+  - **Gravação na Memória Interna do Teclado (Boot)**: Salve sua cor e efeito favoritos diretamente no slot de usuário (`0x0061`) do microcontrolador do teclado para que os LEDs já acendam configurados assim que o notebook ligar.
 - **Compatível com Distros Tradicionais e Imutáveis**: Funciona nativamente no **Ubuntu / Debian** e no **Fedora Workstation / Kinoite / Silverblue (Atomic)** sem necessidade de *package layering* (`rpm-ostree`), Flatpaks ou pacotes `pip`.
 
 ### ✨ Sincronização Inteligente em 5 Níveis + Histerese (±2%)

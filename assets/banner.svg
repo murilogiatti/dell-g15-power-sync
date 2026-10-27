@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 260" width="920" height="260">
+  <defs>
+    <linearGradient id="bannerBg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0D1117"/>
+      <stop offset="50%" stop-color="#131924"/>
+      <stop offset="100%" stop-color="#090C12"/>
+    </linearGradient>
+    <linearGradient id="accentBar" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#00E5FF"/>
+      <stop offset="33%" stop-color="#00E676"/>
+      <stop offset="66%" stop-color="#FFB366"/>
+      <stop offset="100%" stop-color="#FF2200"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Main Card Frame -->
+  <rect x="4" y="4" width="912" height="252" rx="20" fill="url(#bannerBg)" stroke="#232D3F" stroke-width="2"/>
+  <rect x="24" y="242" width="872" height="5" rx="2.5" fill="url(#accentBar)"/>
+
+  <!-- Left Emblem: Miniaturized G15 Shield + 4-Zone Keyboard -->
+  <g transform="translate(36, 26)">
+    <polygon points="38,8 162,8 192,38 192,162 162,192 38,192 8,162 8,38"
+             fill="#0B0E14" stroke="url(#accentBar)" stroke-width="4" stroke-linejoin="round"/>
+    <!-- Screen Sync Header -->
+    <path d="M 44 36 L 156 36 L 164 88 L 36 88 Z" fill="#111824" stroke="#00E5FF" stroke-width="2"/>
+    <circle cx="100" cy="56" r="8" fill="#E6E6E6"/>
+    <text x="100" y="82" text-anchor="middle" fill="#00E5FF" font-family="Ubuntu, system-ui, sans-serif" font-weight="800" font-size="14" letter-spacing="2">G15 SYNC</text>
+
+    <!-- 4 Zones Mini Deck -->
+    <rect x="26" y="100" width="34" height="56" rx="4" fill="#00E5FF" fill-opacity="0.22" stroke="#00E5FF" stroke-width="2"/>
+    <rect x="64" y="100" width="34" height="56" rx="4" fill="#00E676" fill-opacity="0.22" stroke="#00E676" stroke-width="2"/>
+    <rect x="102" y="100" width="34" height="56" rx="4" fill="#FFB366" fill-opacity="0.22" stroke="#FFB366" stroke-width="2"/>
+    <rect x="140" y="100" width="34" height="56" rx="4" fill="#FF2200" fill-opacity="0.22" stroke="#FF2200" stroke-width="2"/>
+
+    <rect x="26" y="164" width="34" height="5" rx="2.5" fill="#00E5FF"/>
+    <rect x="64" y="164" width="34" height="5" rx="2.5" fill="#00E676"/>
+    <rect x="102" y="164" width="34" height="5" rx="2.5" fill="#FFB366"/>
+    <rect x="140" y="164" width="34" height="5" rx="2.5" fill="#FF2200"/>
+  </g>
+
+  <!-- Title & Subtitle -->
+  <text x="264" y="76" fill="#F0F6FC" font-family="Ubuntu, Cantarell, system-ui, sans-serif" font-weight="800" font-size="34">
+    Dell G15 Ambient Sync &amp; Control Center
+  </text>
+  <text x="264" y="108" fill="#8B949E" font-family="Ubuntu, Cantarell, system-ui, sans-serif" font-size="16">
+    Direct USB HID (187c:0550) • 4-Zone RGB Customizer • Kernel Netlink Sync • Top-Bar Tray Widget
+  </text>
+  <text x="264" y="132" fill="#6E7681" font-family="Ubuntu, Cantarell, system-ui, sans-serif" font-size="14" font-style="italic">
+    Controle RGB de 4 zonas, sincronização automática com a tela e widget na barra superior para Linux
+  </text>
+
+  <!-- Feature Pills -->
+  <g transform="translate(264, 154)" font-family="Ubuntu, Cantarell, monospace" font-size="13" font-weight="700">
+    <rect x="0" y="0" width="138" height="32" rx="16" fill="#00E5FF" fill-opacity="0.14" stroke="#00E5FF" stroke-width="1.5"/>
+    <text x="69" y="21" text-anchor="middle" fill="#00E5FF">⚡ 0% CPU Idle</text>
+
+    <rect x="150" y="0" width="154" height="32" rx="16" fill="#00E676" fill-opacity="0.14" stroke="#00E676" stroke-width="1.5"/>
+    <text x="227" y="21" text-anchor="middle" fill="#00E676">🎨 4-Zone RGB</text>
+
+    <rect x="316" y="0" width="164" height="32" rx="16" fill="#FFB366" fill-opacity="0.14" stroke="#FFB366" stroke-width="1.5"/>
+    <text x="398" y="21" text-anchor="middle" fill="#FFB366">🎛️ GTK4 + Adwaita</text>
+
+    <rect x="492" y="0" width="136" height="32" rx="16" fill="#FF2200" fill-opacity="0.14" stroke="#FF2200" stroke-width="1.5"/>
+    <text x="560" y="21" text-anchor="middle" fill="#FF6644">🔥 G-Mode / RPM</text>
+  </g>
+</svg>
