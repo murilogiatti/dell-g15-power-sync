@@ -1,5 +1,8 @@
 #!/bin/bash
+set -e
 # Installer for Dell G15 Power Sync (Simplified White LED Version)
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Localization
 LANG_CODE="${LANG%%_*}"
@@ -43,24 +46,24 @@ fi
 
 # 2. Install Script
 mkdir -p "$HOME/.local/bin"
-cp bin/g15-daemon.sh "$HOME/.local/bin/"
+cp "$SCRIPT_DIR/bin/g15-daemon.sh" "$HOME/.local/bin/"
 chmod +x "$HOME/.local/bin/g15-daemon.sh"
 echo "$MSG_SCRIPTS"
 
 # 3. Setup Systemd Service
 mkdir -p "$HOME/.config/systemd/user/"
-cp systemd/dell-g15-daemon.service "$HOME/.config/systemd/user/dell-g15-daemon.service"
+cp "$SCRIPT_DIR/systemd/dell-g15-daemon.service" "$HOME/.config/systemd/user/dell-g15-daemon.service"
 echo "$MSG_SERVICE"
 
 # 4. Udev Rules (For non-root hardware access)
 if [ ! -f "/etc/udev/rules.d/10-alienware.rules" ]; then
     echo "$MSG_UDEV"
-    sudo cp udev/10-alienware.rules /etc/udev/rules.d/
+    sudo cp "$SCRIPT_DIR/udev/10-alienware.rules" /etc/udev/rules.d/
     sudo udevadm control --reload-rules
     sudo udevadm trigger
     # Load i2c-dev for stability
     sudo modprobe i2c-dev
-    echo "i2c-dev" | sudo tee /etc/modules-load.d/i2c-dev.conf
+    echo "i2c-dev" | sudo tee /etc/modules-load.d/i2c-dev.conf > /dev/null
 fi
 
 # 5. Reload and Start
