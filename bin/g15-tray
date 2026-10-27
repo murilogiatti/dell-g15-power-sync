@@ -17,7 +17,7 @@ import gi
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
-from gi.repository import Adw, Gdk, Gio, GLib, Gtk  # noqa: E402
+from gi.repository import Adw, Gdk, Gio, GLib, Gtk, Pango  # noqa: E402
 
 # --- Configuration & Asset Paths ---
 CONFIG_DIR = os.path.join(
@@ -911,6 +911,58 @@ class G15ControlApp(Adw.Application):
         return False
 
     # --- GTK4 + Libadwaita Control Center ---
+    def _make_full_text_combo_factory(self):
+        factory = Gtk.SignalListItemFactory()
+
+        def on_setup(_f, list_item):
+            lbl = Gtk.Label(xalign=1.0)
+            lbl.set_ellipsize(Pango.EllipsizeMode.NONE)
+            lbl.set_valign(Gtk.Align.CENTER)
+            list_item.set_child(lbl)
+
+        def on_bind(_f, list_item):
+            item = list_item.get_item()
+            lbl = list_item.get_child()
+            if item and lbl:
+                lbl.set_label(item.get_string())
+
+        factory.connect("setup", on_setup)
+        factory.connect("bind", on_bind)
+        return factory
+
+    def _attach_scroll_step_5(self, scale, min_val, max_val):
+        adj = scale.get_adjustment()
+        adj.set_step_increment(5)
+        adj.set_page_increment(5)
+        ctrl = Gtk.EventControllerScroll.new(
+            Gtk.EventControllerScrollFlags.VERTICAL
+            | Gtk.EventControllerScrollFlags.DISCRETE
+        )
+
+        def on_scroll(_controller, _dx, dy):
+            if not scale.get_sensitive() or dy == 0:
+                return False
+            curr = int(round(scale.get_value()))
+            step = 5 if dy < 0 else -5
+            new_val = max(min_val, min(max_val, curr + step))
+            if new_val != curr:
+                scale.set_value(new_val)
+            return True
+
+        ctrl.connect("scroll", on_scroll)
+        scale.add_controller(ctrl)
+
+    def _unclamp_and_unwrap_tree(self, widget):
+        if isinstance(widget, Adw.Clamp):
+            widget.set_maximum_size(1100)
+            widget.set_tightening_threshold(800)
+        elif isinstance(widget, Gtk.Label):
+            widget.set_ellipsize(Pango.EllipsizeMode.NONE)
+        child = widget.get_first_child()
+        while child:
+            self._unclamp_and_unwrap_tree(child)
+            child = child.get_next_sibling()
+
     def present_control_window(self):
         if self.window is None:
             self._build_control_window()
@@ -922,7 +974,7 @@ class G15ControlApp(Adw.Application):
         self.window = Adw.ApplicationWindow(application=self)
         self.window.set_title("Dell G15 Control Center")
         self.window.set_icon_name("dell-g15-control")
-        self.window.set_default_size(580, 720)
+        self.window.set_default_size(680, 740)
         self.window.connect("close-request", self._on_window_close_request)
 
         self._toast_overlay = Adw.ToastOverlay()
@@ -964,6 +1016,7 @@ class G15ControlApp(Adw.Application):
         self._scale_manual.set_hexpand(True)
         for mark in (0, 10, 30, 50, 75, 100):
             self._scale_manual.add_mark(mark, Gtk.PositionType.BOTTOM, None)
+        self._attach_scroll_step_5(self._scale_manual, 0, 100)
         self._scale_manual.connect("value-changed", self._on_ui_manual_changed)
         self._row_manual.add_suffix(self._scale_manual)
         grp_bright.add(self._row_manual)
@@ -1162,6 +1215,7 @@ class G15ControlApp(Adw.Application):
             ),
         )
         mode_strings = Gtk.StringList.new([tr(pt, en) for _k, pt, en in EFFECT_MODES])
+        self._row_mode.set_factory(self._make_full_text_combo_factory())
         self._row_mode.set_model(mode_strings)
         self._row_mode.connect("notify::selected", self._on_ui_mode_changed)
         grp_fx.add(self._row_mode)
@@ -1178,6 +1232,7 @@ class G15ControlApp(Adw.Application):
         self._scale_speed.set_draw_value(True)
         for mark in (10, 25, 50, 75, 100):
             self._scale_speed.add_mark(mark, Gtk.PositionType.BOTTOM, None)
+        self._attach_scroll_step_5(self._scale_speed, 10, 100)
         self._scale_speed.connect("value-changed", self._on_ui_speed_changed)
         self._row_speed.add_suffix(self._scale_speed)
         grp_fx.add(self._row_speed)
@@ -1218,6 +1273,7 @@ class G15ControlApp(Adw.Application):
             ),
         )
         power_strings = Gtk.StringList.new([tr(pt, en) for _k, pt, en in POWER_PROFILES])
+        self._row_power.set_factory(self._make_full_text_combo_factory())
         self._row_power.set_model(power_strings)
         self._row_power.connect("notify::selected", self._on_ui_power_profile_changed)
         grp_hw.add(self._row_power)
@@ -1235,6 +1291,7 @@ class G15ControlApp(Adw.Application):
         grp_hw.add(self._row_telemetry)
 
         page.add(grp_hw)
+        self._unclamp_and_unwrap_tree(page)
 
         toolbar_view.set_content(page)
         self._toast_overlay.set_child(toolbar_view)
