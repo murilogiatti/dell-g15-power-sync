@@ -1,7 +1,7 @@
 <div align="center">
-  <h1>🌌 Dell G15 Ambient Sync</h1>
-  <p><i>Zero-dependency, event-driven keyboard backlight synchronizer for Dell G15 laptops on Linux.</i></p>
-  <p><i>Sincronizador de iluminação de teclado orientado a eventos e sem dependências externas para Dell G15 no Linux.</i></p>
+  <h1>🌌 Dell G15 Ambient Sync & Control Center</h1>
+  <p><i>Zero-dependency keyboard backlight synchronizer, 4-zone RGB controller, and top-bar tray widget for Dell G15 laptops on Linux.</i></p>
+  <p><i>Sincronizador de iluminação de teclado, controlador RGB de 4 zonas e widget na barra superior para Dell G15 no Linux.</i></p>
 
   [![CI](https://github.com/murilogiatti/dell-g15-power-sync/actions/workflows/test.yml/badge.svg)](https://github.com/murilogiatti/dell-g15-power-sync/actions/workflows/test.yml)
   [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -17,30 +17,39 @@
 <h2 id="english">🇺🇸 English (EN-US)</h2>
 
 ### Overview
-**Dell G15 Ambient Sync** is an ultra-lightweight background daemon that automatically synchronizes your Dell G15 keyboard backlight intensity with your screen brightness.
+**Dell G15 Ambient Sync & Control Center** combines an ultra-lightweight, event-driven hardware daemon (`g15-daemon`) with a native **Top-Bar System Tray Indicator + GTK4/Libadwaita Control Center** (`g15-tray`).
 
 Built from scratch with a clean **Data-Oriented Design (DOD)** architecture, it eliminates polling loops (`sleep`) and heavy third-party CLI tools (`openrgb`):
 - **Direct USB HID Communication (No OpenRGB Required)**: Talks directly to the Alienware AW-ELC controller (`187c:0550` / `187c:0551`) via Linux `/dev/hidraw*` (`HIDIOCSFEATURE` ioctls) using only the Python 3 standard library. Automatically queries the controller's firmware zone table (`0x20 0x02`) to support all Dell G15 variants (`5511`, `5515`, `5520`, `5525`, `5530`, `5535`).
-- **100% Event-Driven (Zero Polling)**: Listens directly to Linux kernel `AF_NETLINK` (`NETLINK_KOBJECT_UEVENT`) and `inotify` sysfs events. Consumes **0% CPU** while idle and reacts instantaneously with a **150ms debounce** when you adjust screen brightness.
+- **100% Event-Driven (Zero Polling)**: Listens directly to Linux kernel `AF_NETLINK` (`NETLINK_KOBJECT_UEVENT`) and `inotify` sysfs/config events. Consumes **0% CPU** while idle and reacts instantaneously with a **150ms debounce**.
+- **Top-Bar System Tray Widget (`StatusNotifierItem` + `Dbusmenu`)**: Integrates natively with GNOME (AppIndicator) and KDE Plasma:
+  - **Mouse-Wheel Brightness Scroll**: Scroll up/down directly over the top-bar keyboard icon to step keyboard intensity (`0%`, `10%`, `30%`, `50%`, `75%`, `100%`).
+  - **Instant Menu Actions**: Toggle *Ambient Sync*, set fixed brightness, switch RGB color presets, select onboard hardware animations, switch thermal/power profiles (`power-saver`, `balanced`, `performance`), and view live `CPU`/`GPU` temperatures + fan RPM.
+- **GTK4 + Libadwaita Control Center (`g15-tray --show`)**:
+  - **Unified or Independent 4-Zone RGB**: Customize all 4 keyboard zones (`Left/WASD`, `Center-Left`, `Center-Right`, `NumPad`) independently or uniformly with full RGB color pickers.
+  - **Onboard Hardware Effects (0% CPU)**: Trigger native AW-ELC chip animations (`Static`, `Breathing`, `Pulse`, `Two-Color Morph`, `Spectrum Cycle`, `Rainbow Wave`) with adjustable tempo (`20–250`).
+  - **BIOS / Boot EEPROM Persistence**: Save your favorite lighting profile directly to hardware slot `0x0061` so your keyboard boots with your chosen color before the OS loads.
 - **Ready for Standard & Immutable Distros**: Works out of the box on **Ubuntu / Debian** and **Fedora Workstation / Kinoite / Silverblue (Atomic)** without `rpm-ostree` package layering, Flatpaks, or `pip` packages.
 
-### ✨ Features
-- **Calibrated Pure White (`#E6E6E6`)**: Locks the keyboard to a clean white capped at `230` (`#E6E6E6`) instead of `#FFFFFF` to prevent the hardware power limiter from dropping brightness.
-- **Smart 5-Tier Sync + Hysteresis (±2%)**: Tracks `amdgpu_bl*` screen brightness with a ±2% deadband to prevent boundary flicker:
-  - 🌑 **Screen Off (DPMS)** ➔ **0% Keyboard** *(Hardware Dimmer `0x26` at 100% — LEDs off)*
-  - 🌙 **0–20% Screen** ➔ **10% Keyboard** (`#171717` — *Safe minimum floor while screen is active*)
-  - 🌘 **21–40% Screen** ➔ **30% Keyboard** (`#454545`)
-  - 🌗 **41–60% Screen** ➔ **50% Keyboard** (`#737373`)
-  - 🌔 **61–80% Screen** ➔ **75% Keyboard** (`#ACACAC`)
-  - 🌕 **81–100% Screen** ➔ **100% Keyboard** (`#E6E6E6`)
-- **Suspend/Resume Auto-Recovery**: Detects `hidraw` USB re-enumeration upon waking from sleep and automatically restores your keyboard lighting.
+### ✨ Smart 5-Tier Ambient Sync + Hysteresis (±2%)
+When **Ambient Sync** is enabled, your chosen RGB colors scale proportionally with screen brightness (`amdgpu_bl*`) using a ±2% deadband to prevent boundary flicker:
+- 🌑 **Screen Off (DPMS)** ➔ **0% Keyboard** *(Hardware Dimmer `0x26` at 100% — LEDs off)*
+- 🌙 **0–20% Screen** ➔ **10% Keyboard** *(Safe minimum floor while screen is active)*
+- 🌘 **21–40% Screen** ➔ **30% Keyboard**
+- 🌗 **41–60% Screen** ➔ **50% Keyboard**
+- 🌔 **61–80% Screen** ➔ **75% Keyboard**
+- 🌕 **81–100% Screen** ➔ **100% Keyboard** *(Capped at `230` / `#E6E6E6` by default to prevent hardware power-limiter drops)*
 
 ### 🚀 Installation & Upgrade
-The installer automatically cleans up any legacy services or scripts from older versions before installing:
+The installer automatically cleans up any legacy services or scripts from older versions and enables both `dell-g15-daemon.service` and `dell-g15-tray.service`:
 ```bash
 git clone https://github.com/murilogiatti/dell-g15-power-sync.git
 cd dell-g15-power-sync
 ./install.sh
+```
+To open the graphical Control Center at any time from the terminal or application launcher:
+```bash
+~/.local/bin/g15-tray --show
 ```
 
 ### 🗑️ Uninstallation
@@ -53,30 +62,39 @@ cd dell-g15-power-sync
 <h2 id="português">🇧🇷 Português (PT-BR)</h2>
 
 ### Visão Geral
-O **Dell G15 Ambient Sync** é um daemon ultraleve em segundo plano que sincroniza automaticamente a intensidade dos LEDs do teclado do Dell G15 com o brilho da tela.
+O **Dell G15 Ambient Sync & Control Center** une um daemon de hardware ultraleve orientado a eventos (`g15-daemon`) a um **Indicador na Barra de Notificações Superior + Painel de Controle GTK4/Libadwaita** (`g15-tray`).
 
 Construído do zero com arquitetura **Data-Oriented Design (DOD)**, ele elimina loops de polling (`sleep`) e a dependência de ferramentas externas pesadas (`openrgb`):
 - **Comunicação USB HID Direta (Sem OpenRGB)**: Conversa diretamente com o controlador Alienware AW-ELC (`187c:0550` / `187c:0551`) via `/dev/hidraw*` (`ioctl HIDIOCSFEATURE`) usando apenas a biblioteca padrão do Python 3. Consulta automaticamente a tabela de zonas do firmware (`0x20 0x02`), suportando todas as variantes do Dell G15 (`5511`, `5515`, `5520`, `5525`, `5530`, `5535`).
-- **100% Orientado a Eventos (Zero Polling)**: Escuta diretamente eventos `AF_NETLINK` (`NETLINK_KOBJECT_UEVENT`) e `inotify` do kernel Linux. Consome **0% de CPU** em repouso e reage instantaneamente com **debounce de 150ms** ao alterar o brilho da tela.
+- **100% Orientado a Eventos (Zero Polling)**: Escuta diretamente eventos `AF_NETLINK` (`NETLINK_KOBJECT_UEVENT`) e `inotify` do kernel Linux. Consome **0% de CPU** em repouso e reage instantaneamente com **debounce de 150ms**.
+- **Widget na Barra de Notificações (`StatusNotifierItem` + `Dbusmenu`)**: Integração nativa com GNOME (AppIndicator) e KDE Plasma:
+  - **Scroll do Mouse no Ícone**: Role a roda do mouse sobre o ícone do teclado no topo da tela para ajustar o brilho (`0%`, `10%`, `30%`, `50%`, `75%`, `100%`) instantaneamente.
+  - **Menu Rápido Completo**: Alterne entre *Brilho Automático (Ambient Sync)* e níveis fixos, escolha presets de cores RGB, ative efeitos nativos de hardware, mude o perfil térmico/energia (`Economia`, `Equilibrado`, `Desempenho / G-Mode`) e acompanhe temperaturas `CPU`/`GPU` e rotação dos coolers (`RPM`).
+- **Painel de Controle GTK4 + Libadwaita (`g15-tray --show`)**:
+  - **Controle RGB Unificado ou por Zona (4 Zonas)**: Personalize as 4 zonas do teclado (`Esquerda/WASD`, `Centro-Esquerda`, `Centro-Direita`, `NumPad`) individualmente ou em conjunto com seletores de cor RGB.
+  - **Efeitos Nativos de Hardware (0% CPU)**: Acione animações processadas pelo próprio chip AW-ELC (`Estático`, `Respiração`, `Pulso`, `Transição 2 Cores / Morph`, `Ciclo Spectrum`, `Ondas Arco-Íris / Rainbow`) com controle de velocidade (`20–250`).
+  - **Gravação na Memória de Boot (BIOS / EEPROM)**: Salve sua cor e efeito favoritos diretamente no slot de boot `0x0061` para que o teclado já ligue configurado antes mesmo do Linux iniciar.
 - **Compatível com Distros Tradicionais e Imutáveis**: Funciona nativamente no **Ubuntu / Debian** e no **Fedora Workstation / Kinoite / Silverblue (Atomic)** sem necessidade de *package layering* (`rpm-ostree`), Flatpaks ou pacotes `pip`.
 
-### ✨ Funcionalidades
-- **Branco Puro Calibrado (`#E6E6E6`)**: Mantém o teclado em branco estável limitado ao pico `230` (`#E6E6E6`) em vez de `#FFFFFF`, evitando quedas de luminosidade pelo limitador de energia do hardware.
-- **Sincronização em 5 Níveis + Histerese (±2%)**: Acompanha o brilho da tela (`amdgpu_bl*`) com banda morta de ±2% nas fronteiras para evitar oscilações:
-  - 🌑 **Tela Desligada (DPMS)** ➔ **0% Teclado** *(Dimmer de Hardware `0x26` em 100% — LEDs apagados)*
-  - 🌙 **0–20% Tela** ➔ **10% Teclado** (`#171717` — *Piso mínimo seguro com a tela ligada*)
-  - 🌘 **21–40% Tela** ➔ **30% Teclado** (`#454545`)
-  - 🌗 **41–60% Tela** ➔ **50% Teclado** (`#737373`)
-  - 🌔 **61–80% Tela** ➔ **75% Teclado** (`#ACACAC`)
-  - 🌕 **81–100% Tela** ➔ **100% Teclado** (`#E6E6E6`)
-- **Recuperação Automática Pós-Suspensão**: Detecta a reconexão USB `hidraw` ao acordar o notebook e reaplica o brilho calibrado automaticamente.
+### ✨ Sincronização Inteligente em 5 Níveis + Histerese (±2%)
+Quando o **Ambient Sync** está ativo, as cores RGB escolhidas têm seu brilho escalado proporcionalmente ao brilho da tela (`amdgpu_bl*`) com banda morta de ±2% para evitar oscilações:
+- 🌑 **Tela Desligada (DPMS)** ➔ **0% Teclado** *(Dimmer de Hardware `0x26` em 100% — LEDs apagados)*
+- 🌙 **0–20% Tela** ➔ **10% Teclado** *(Piso mínimo seguro com a tela ligada)*
+- 🌘 **21–40% Tela** ➔ **30% Teclado**
+- 🌗 **41–60% Tela** ➔ **50% Teclado**
+- 🌔 **61–80% Tela** ➔ **75% Teclado**
+- 🌕 **81–100% Tela** ➔ **100% Teclado** *(Limitado por padrão ao pico `230` / `#E6E6E6` para proteger contra cortes do limitador de energia)*
 
 ### 🚀 Instalação e Atualização
-O instalador remove automaticamente quaisquer scripts ou serviços de versões antigas antes de instalar:
+O instalador remove automaticamente quaisquer scripts ou serviços de versões antigas e ativa tanto o `dell-g15-daemon.service` quanto o `dell-g15-tray.service`:
 ```bash
 git clone https://github.com/murilogiatti/dell-g15-power-sync.git
 cd dell-g15-power-sync
 ./install.sh
+```
+Para abrir o Painel de Controle gráfico a qualquer momento pelo menu de aplicativos ou terminal:
+```bash
+~/.local/bin/g15-tray --show
 ```
 
 ### 🗑️ Desinstalação

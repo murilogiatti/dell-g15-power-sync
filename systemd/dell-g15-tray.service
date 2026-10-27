@@ -1,0 +1,13 @@
+[Unit]
+Description=Dell G15 System Tray Widget & Control Center
+After=graphical-session.target dell-g15-daemon.service
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/g15-tray
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=graphical-session.target default.target

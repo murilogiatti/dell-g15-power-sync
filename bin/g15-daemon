@@ -9,6 +9,7 @@ import ctypes
 import ctypes.util
 import fcntl
 import glob
+import json
 import os
 import select
 import signal
@@ -25,10 +26,18 @@ PACKET_DELAY_SEC = 0.05
 DEBOUNCE_SEC = 0.15
 NETLINK_KOBJECT_UEVENT = 15
 
-# Inotify constants for direct sysfs brightness file watching
+SLOT_VOLATILE = 0xFFFF
+SLOT_BOOT_DEFAULT = 0x0061
+DURATION_STATIC = 0x07D0
+DURATION_SPECTRUM = 0x01AC
+TEMPO_MAX = 0x00FA
+
+# Inotify constants for direct sysfs & config file watching
 IN_MODIFY = 0x00000002
 IN_ATTRIB = 0x00000004
 IN_CLOSE_WRITE = 0x00000008
+IN_MOVED_TO = 0x00000080
+IN_CREATE = 0x00000100
 IN_NONBLOCK = 0x00000800
 IN_CLOEXEC = 0x00080000
 
@@ -49,9 +58,95 @@ ZONE_RGB_BYTES = (0x17, 0x45, 0x73, 0xAC, 0xE6)
 ZONE_THRESHOLDS = (20, 40, 60, 80)
 HYSTERESIS = 2
 
-# Configurable sysfs roots (overridable in unit tests)
+# 7-step Rainbow / Spectrum table (R, G, B)
+RAINBOW_STEPS = (
+    (255, 0, 0),
+    (255, 165, 0),
+    (255, 255, 0),
+    (0, 128, 0),
+    (0, 191, 255),
+    (0, 0, 255),
+    (128, 0, 128),
+)
+
+DEFAULT_CONFIG = {
+    "sync_screen": True,
+    "manual_brightness": 100,
+    "mode": "static",
+    "speed": 150,
+    "per_zone": False,
+    "zones_rgb": ["E6E6E6", "E6E6E6", "E6E6E6", "E6E6E6"],
+    "zones_rgb2": ["00E5FF", "00E5FF", "00E5FF", "00E5FF"],
+    "power_cap": True,
+    "save_boot": False,
+}
+
+# Configurable roots (overridable in unit tests)
 SYSFS_BACKLIGHT_ROOT = "/sys/class/backlight"
 SYSFS_HIDRAW_ROOT = "/sys/class/hidraw"
+CONFIG_DIR = os.path.join(
+    os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config")), "dell-g15"
+)
+CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
+
+
+def load_config(path=None):
+    cfg_path = path or CONFIG_PATH
+    cfg = dict(DEFAULT_CONFIG)
+    cfg["zones_rgb"] = list(DEFAULT_CONFIG["zones_rgb"])
+    cfg["zones_rgb2"] = list(DEFAULT_CONFIG["zones_rgb2"])
+    try:
+        with open(cfg_path, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+        if isinstance(raw, dict):
+            for k in DEFAULT_CONFIG:
+                if k in raw:
+                    cfg[k] = raw[k]
+    except (OSError, ValueError):
+        pass
+
+    # Normalize arrays to 4 zones
+    for key, fallback in (("zones_rgb", "E6E6E6"), ("zones_rgb2", "00E5FF")):
+        arr = cfg.get(key)
+        if not isinstance(arr, list) or len(arr) < 4:
+            cfg[key] = [fallback] * 4
+        else:
+            cfg[key] = [str(x).lstrip("#").upper()[:6] or fallback for x in arr[:4]]
+    return cfg
+
+
+def save_config(cfg, path=None):
+    cfg_path = path or CONFIG_PATH
+    cfg_dir = os.path.dirname(cfg_path)
+    os.makedirs(cfg_dir, exist_ok=True)
+    tmp_path = f"{cfg_path}.tmp.{os.getpid()}"
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump(cfg, f, indent=2)
+    os.replace(tmp_path, cfg_path)
+
+
+def parse_hex_rgb(hex_str, power_cap=True):
+    clean = str(hex_str).lstrip("#").strip()
+    if len(clean) != 6:
+        r, g, b = 230, 230, 230
+    else:
+        try:
+            r = int(clean[0:2], 16)
+            g = int(clean[2:4], 16)
+            b = int(clean[4:6], 16)
+        except ValueError:
+            r, g, b = 230, 230, 230
+    if power_cap:
+        r = min(r, 230)
+        g = min(g, 230)
+        b = min(b, 230)
+    return r, g, b
+
+
+def scale_rgb(rgb_tuple, scale_perc):
+    r, g, b = rgb_tuple
+    s = max(0, min(100, int(scale_perc)))
+    return (r * s) // 100, (g * s) // 100, (b * s) // 100
 
 
 def resolve_backlight_dir(backlight_root=None):
@@ -134,29 +229,130 @@ def build_packet(cmd_bytes):
     return buf
 
 
-def build_zone_packets(zone_level, zone_ids=ZONES_DEFAULT_16):
+def build_mode_action_packet(actions):
     """
-    Builds the exact 34-byte HID Feature report sequence for the AW-ELC controller.
-    Matches the exact packet sequence verified via LD_PRELOAD on Dell G15 5515 (0x0E05):
-    - Command 0x26 (DIM) is sent BEFORE 0x21 0x00 0x01 (USER_ANIM_NEW).
-    - Every hardware zone in zone_ids receives 0x23 (SELECT_ZONES) + 0x24 (ADD_ACTION).
-    - Ends with 0x21 0x00 0x03 0xFF 0xFF (USER_ANIM_FINISH_PLAY).
+    Packs 1 to 3 mode action blocks into a single 0x24 ADD_ACTION report.
+    Each item in actions is (mode_byte, duration_u16, tempo_u16, r, g, b).
     """
+    payload = [0x24]
+    for mode_b, dur, tempo, r, g, b in actions[:3]:
+        payload.extend(
+            (
+                mode_b,
+                (dur >> 8) & 0xFF,
+                dur & 0xFF,
+                (tempo >> 8) & 0xFF,
+                tempo & 0xFF,
+                r & 0xFF,
+                g & 0xFF,
+                b & 0xFF,
+            )
+        )
+    return build_packet(payload)
+
+
+def build_zone_packets(zone_level, zone_ids=ZONES_DEFAULT_16, config=None, save_boot=False):
+    """
+    Builds the 34-byte HID Feature report sequence for the AW-ELC controller.
+    Supports per-zone RGB, brightness scaling, hardware animations, and EEPROM boot save.
+    """
+    cfg = config or DEFAULT_CONFIG
     num_zones = len(zone_ids)
-    if zone_level == 0:
+
+    if zone_level <= 0 and not save_boot:
         return [build_packet((0x26, 100, 0x00, num_zones, *zone_ids))]
 
-    idx = ZONE_LEVELS.index(zone_level)
-    rgb = ZONE_RGB_BYTES[idx]
+    eff_level = max(0, min(100, int(zone_level)))
+    power_cap = bool(cfg.get("power_cap", True))
+    per_zone = bool(cfg.get("per_zone", False))
+    mode = str(cfg.get("mode", "static")).lower()
+    speed = max(20, min(250, int(cfg.get("speed", 150))))
+
+    zones_hex1 = cfg.get("zones_rgb", DEFAULT_CONFIG["zones_rgb"])
+    zones_hex2 = cfg.get("zones_rgb2", DEFAULT_CONFIG["zones_rgb2"])
+
+    rgb1_table = [
+        scale_rgb(parse_hex_rgb(zones_hex1[i % len(zones_hex1)], power_cap), eff_level)
+        for i in range(4)
+    ]
+    rgb2_table = [
+        scale_rgb(parse_hex_rgb(zones_hex2[i % len(zones_hex2)], power_cap), eff_level)
+        for i in range(4)
+    ]
+
+    slot = SLOT_BOOT_DEFAULT if save_boot else SLOT_VOLATILE
+    slot_hi, slot_lo = (slot >> 8) & 0xFF, slot & 0xFF
 
     packets = [
         build_packet((0x26, 0x00, 0x00, num_zones, *zone_ids)),
-        build_packet((0x21, 0x00, 0x01, 0xFF, 0xFF, 0x00, 0x00)),
     ]
-    for z in zone_ids:
-        packets.append(build_packet((0x23, 0x01, 0x00, 0x01, z)))
-        packets.append(build_packet((0x24, 0x00, 0x07, 0xD0, 0x00, 0xFA, rgb, rgb, rgb)))
-    packets.append(build_packet((0x21, 0x00, 0x03, 0xFF, 0xFF, 0x00, 0x00)))
+    if save_boot:
+        packets.append(build_packet((0x21, 0x00, 0x04, slot_hi, slot_lo, 0x00, 0x00)))
+    packets.append(build_packet((0x21, 0x00, 0x01, slot_hi, slot_lo, 0x00, 0x00)))
+
+    for idx, hw_zone in enumerate(zone_ids):
+        logical_idx = (idx % 4) if per_zone else 0
+        r1, g1, b1 = rgb1_table[logical_idx]
+        r2, g2, b2 = rgb2_table[logical_idx]
+
+        packets.append(build_packet((0x23, 0x01, 0x00, 0x01, hw_zone)))
+
+        if mode == "pulse":
+            period = max(500, speed * 10)
+            packets.append(
+                build_mode_action_packet([(0x01, period, speed, r1, g1, b1)])
+            )
+        elif mode == "breathing":
+            period = max(500, speed * 10)
+            packets.append(
+                build_mode_action_packet(
+                    [
+                        (0x02, period, speed, r1, g1, b1),
+                        (0x02, period, speed, 0, 0, 0),
+                    ]
+                )
+            )
+        elif mode == "morph":
+            period = max(400, speed * 10)
+            packets.append(
+                build_mode_action_packet(
+                    [
+                        (0x02, period, speed, r1, g1, b1),
+                        (0x02, period, speed, r2, g2, b2),
+                    ]
+                )
+            )
+        elif mode in ("spectrum", "rainbow"):
+            offset = (idx % 4) if mode == "rainbow" else 0
+            steps = []
+            for s_i in range(7):
+                base_rgb = RAINBOW_STEPS[(s_i + offset) % 7]
+                if power_cap:
+                    base_rgb = (
+                        min(base_rgb[0], 230),
+                        min(base_rgb[1], 230),
+                        min(base_rgb[2], 230),
+                    )
+                sr, sg, sb = scale_rgb(base_rgb, eff_level)
+                steps.append((0x02, DURATION_SPECTRUM, speed, sr, sg, sb))
+            packets.append(build_mode_action_packet(steps[0:3]))
+            packets.append(build_mode_action_packet(steps[3:6]))
+            packets.append(build_mode_action_packet(steps[6:7]))
+        else:
+            # Default: Static color (0x00)
+            packets.append(
+                build_mode_action_packet(
+                    [(0x00, DURATION_STATIC, TEMPO_MAX, r1, g1, b1)]
+                )
+            )
+
+    if save_boot:
+        packets.append(build_packet((0x21, 0x00, 0x02, slot_hi, slot_lo, 0x00, 0x00)))
+        packets.append(build_packet((0x21, 0x00, 0x06, slot_hi, slot_lo, 0x00, 0x00)))
+        packets.append(build_packet((0x21, 0x00, 0x07, slot_hi, slot_lo, 0x00, 0x00)))
+    else:
+        packets.append(build_packet((0x21, 0x00, 0x03, slot_hi, slot_lo, 0x00, 0x00)))
+
     return packets
 
 
@@ -185,7 +381,9 @@ def detect_zone_ids(fd, delay=PACKET_DELAY_SEC):
     return ZONES_DEFAULT_16
 
 
-def apply_zone_to_hardware(hidraw_path, zone_level, zone_ids=None, delay=PACKET_DELAY_SEC):
+def apply_zone_to_hardware(
+    hidraw_path, zone_level, zone_ids=None, delay=PACKET_DELAY_SEC, config=None, save_boot=False
+):
     if not hidraw_path or not os.path.exists(hidraw_path):
         return False, zone_ids
 
@@ -194,7 +392,7 @@ def apply_zone_to_hardware(hidraw_path, zone_level, zone_ids=None, delay=PACKET_
         fd = os.open(hidraw_path, os.O_RDWR)
         if zone_ids is None:
             zone_ids = detect_zone_ids(fd, delay=delay)
-        packets = build_zone_packets(zone_level, zone_ids)
+        packets = build_zone_packets(zone_level, zone_ids, config=config, save_boot=save_boot)
         for pkt in packets:
             resp = send_hid_packet(fd, pkt, delay=delay)
             if resp[1] != 0x03:
@@ -217,18 +415,27 @@ def open_netlink_uevent_socket():
     return sock
 
 
-def open_inotify_backlight_watch(backlight_dir):
-    if not backlight_dir or not os.path.isdir(backlight_dir):
-        return -1
+def open_inotify_watches(backlight_dir, config_dir=None):
+    cfg_dir = config_dir or CONFIG_DIR
+    os.makedirs(cfg_dir, exist_ok=True)
+    if not os.path.exists(CONFIG_PATH):
+        try:
+            save_config(DEFAULT_CONFIG)
+        except OSError:
+            pass
     try:
         libc_name = ctypes.util.find_library("c") or "libc.so.6"
         libc = ctypes.CDLL(libc_name, use_errno=True)
         ifd = libc.inotify_init1(IN_NONBLOCK | IN_CLOEXEC)
         if ifd < 0:
             return -1
-        for fname in ("brightness", "actual_brightness", "bl_power"):
-            fpath = os.path.join(backlight_dir, fname).encode("utf-8")
-            libc.inotify_add_watch(ifd, fpath, IN_MODIFY | IN_CLOSE_WRITE | IN_ATTRIB)
+        if backlight_dir and os.path.isdir(backlight_dir):
+            for fname in ("brightness", "actual_brightness", "bl_power"):
+                fpath = os.path.join(backlight_dir, fname).encode("utf-8")
+                libc.inotify_add_watch(ifd, fpath, IN_MODIFY | IN_CLOSE_WRITE | IN_ATTRIB)
+        libc.inotify_add_watch(
+            ifd, cfg_dir.encode("utf-8"), IN_CLOSE_WRITE | IN_MOVED_TO | IN_CREATE
+        )
         return ifd
     except Exception:
         return -1
@@ -244,9 +451,29 @@ def parse_relevant_uevent(raw_bytes):
     return None
 
 
-def run_daemon():
-    running = True
+def compute_effective_state(cfg, perc, screen_on, current_auto_zone):
+    if not screen_on:
+        return 0, current_auto_zone
+    if cfg.get("sync_screen", True):
+        auto_zone = compute_target_zone(perc, screen_on, current_auto_zone)
+        return auto_zone, auto_zone
+    manual = max(0, min(100, int(cfg.get("manual_brightness", 100))))
+    return manual, current_auto_zone
 
+
+def make_state_signature(cfg, eff_level):
+    return (
+        eff_level,
+        cfg.get("mode", "static"),
+        cfg.get("speed", 150),
+        cfg.get("per_zone", False),
+        tuple(cfg.get("zones_rgb", ())),
+        tuple(cfg.get("zones_rgb2", ())),
+        cfg.get("power_cap", True),
+    )
+
+
+def run_daemon():
     def handle_sig(_signum, _frame):
         sys.exit(0)
 
@@ -256,22 +483,25 @@ def run_daemon():
     backlight_dir = resolve_backlight_dir()
     hidraw_path = resolve_hidraw_dev()
     zone_ids = None
-    current_zone = -1
+    current_auto_zone = -1
+    last_sig = None
 
-    # Initial sync on startup
+    cfg = load_config()
     perc, screen_on = read_screen_state(backlight_dir)
-    target = compute_target_zone(perc, screen_on, current_zone)
-    ok, zone_ids = apply_zone_to_hardware(hidraw_path, target, zone_ids)
+    eff_level, current_auto_zone = compute_effective_state(
+        cfg, perc, screen_on, current_auto_zone
+    )
+    ok, zone_ids = apply_zone_to_hardware(hidraw_path, eff_level, zone_ids, config=cfg)
     if ok:
-        current_zone = target
+        last_sig = make_state_signature(cfg, eff_level)
 
     sock = open_netlink_uevent_socket()
-    ifd = open_inotify_backlight_watch(backlight_dir)
+    ifd = open_inotify_watches(backlight_dir)
     watch_fds = [sock] + ([ifd] if ifd >= 0 else [])
 
     print(
         f"Dell G15 Ambient Sync started (Direct HID: {hidraw_path or 'waiting'}, "
-        f"Backlight: {backlight_dir or 'default'}, Initial: {perc}% -> Zone {target}%)",
+        f"Backlight: {backlight_dir or 'default'}, Initial: {perc}% -> Keyboard {eff_level}%)",
         flush=True,
     )
 
@@ -279,7 +509,7 @@ def run_daemon():
     pending_rebind = False
 
     try:
-        while running:
+        while True:
             timeout = DEBOUNCE_SEC if (pending_sync or pending_rebind) else None
             readable, _, _ = select.select(watch_fds, [], [], timeout)
 
@@ -309,19 +539,41 @@ def run_daemon():
             if pending_rebind or not hidraw_path:
                 hidraw_path = resolve_hidraw_dev()
                 zone_ids = None
-                current_zone = -1
+                last_sig = None
                 pending_rebind = False
 
             if pending_sync:
                 if not backlight_dir or not os.path.isdir(backlight_dir):
                     backlight_dir = resolve_backlight_dir()
+                cfg = load_config()
                 perc, screen_on = read_screen_state(backlight_dir)
-                target = compute_target_zone(perc, screen_on, current_zone)
-                if target != current_zone:
-                    ok, zone_ids = apply_zone_to_hardware(hidraw_path, target, zone_ids)
+                eff_level, current_auto_zone = compute_effective_state(
+                    cfg, perc, screen_on, current_auto_zone
+                )
+
+                if cfg.get("save_boot"):
+                    cfg["save_boot"] = False
+                    try:
+                        save_config(cfg)
+                    except OSError:
+                        pass
+                    apply_zone_to_hardware(
+                        hidraw_path, eff_level, zone_ids, config=cfg, save_boot=True
+                    )
+                    last_sig = None
+
+                new_sig = make_state_signature(cfg, eff_level)
+                if new_sig != last_sig:
+                    ok, zone_ids = apply_zone_to_hardware(
+                        hidraw_path, eff_level, zone_ids, config=cfg
+                    )
                     if ok:
-                        print(f"Sync: Screen {perc}% -> Keyboard {target}%", flush=True)
-                        current_zone = target
+                        print(
+                            f"Sync: Screen {perc}% -> Keyboard {eff_level}% "
+                            f"(mode={cfg.get('mode')}, sync={cfg.get('sync_screen')})",
+                            flush=True,
+                        )
+                        last_sig = new_sig
                 pending_sync = False
     except SystemExit:
         pass

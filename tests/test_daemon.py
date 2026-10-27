@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Unit tests for Dell G15 Ambient Sync Daemon."""
+"""Unit tests for Dell G15 Ambient Sync Daemon & RGB Engine."""
 
 import importlib.machinery
 import importlib.util
@@ -119,6 +119,48 @@ class TestDellG15Daemon(unittest.TestCase):
             list(max_pkts[-1][:9]),
             [0x00, 0x03, 0x21, 0x00, 0x03, 0xFF, 0xFF, 0x00, 0x00],
         )
+
+    def test_per_zone_rgb_and_modes_and_boot_save(self):
+        zones_4 = (0x00, 0x01, 0x02, 0x03)
+        cfg = dict(g15.DEFAULT_CONFIG)
+        cfg["per_zone"] = True
+        cfg["power_cap"] = False
+        cfg["zones_rgb"] = ["FF0000", "00FF00", "0000FF", "FFFF00"]
+
+        pkts = g15.build_zone_packets(50, zones_4, config=cfg)
+        # Zone 0 scaled at 50% -> R=127 (0x7F), G=0, B=0
+        self.assertEqual(list(pkts[3][8:11]), [127, 0, 0])
+        # Zone 1 scaled at 50% -> R=0, G=127 (0x7F), B=0
+        self.assertEqual(list(pkts[5][8:11]), [0, 127, 0])
+
+        # Morph mode packs two 0x02 actions per zone into a single 0x24 packet
+        cfg["mode"] = "morph"
+        cfg["zones_rgb2"] = ["00E5FF"] * 4
+        morph_pkts = g15.build_zone_packets(100, zones_4, config=cfg)
+        self.assertEqual(len(morph_pkts), 11)
+        self.assertEqual(morph_pkts[3][3], 0x02)
+        self.assertEqual(morph_pkts[3][11], 0x02)
+
+        # Save boot EEPROM uses slot 0x0061 and ends with SAVE (0x02), SET_DEFAULT (0x06), PLAY (0x07)
+        boot_pkts = g15.build_zone_packets(100, zones_4, config=cfg, save_boot=True)
+        self.assertEqual(list(boot_pkts[1][:7]), [0x00, 0x03, 0x21, 0x00, 0x04, 0x00, 0x61])
+        self.assertEqual(list(boot_pkts[-3][:7]), [0x00, 0x03, 0x21, 0x00, 0x02, 0x00, 0x61])
+        self.assertEqual(list(boot_pkts[-2][:7]), [0x00, 0x03, 0x21, 0x00, 0x06, 0x00, 0x61])
+        self.assertEqual(list(boot_pkts[-1][:7]), [0x00, 0x03, 0x21, 0x00, 0x07, 0x00, 0x61])
+
+    def test_config_load_and_save_atomic(self):
+        cfg_file = os.path.join(self.root, "config.json")
+        cfg = g15.load_config(cfg_file)
+        self.assertTrue(cfg["sync_screen"])
+        cfg["sync_screen"] = False
+        cfg["manual_brightness"] = 75
+        cfg["zones_rgb"] = ["#00e5ff", "ff2200", "00e676", "b388ff"]
+        g15.save_config(cfg, cfg_file)
+
+        reloaded = g15.load_config(cfg_file)
+        self.assertFalse(reloaded["sync_screen"])
+        self.assertEqual(reloaded["manual_brightness"], 75)
+        self.assertEqual(reloaded["zones_rgb"][0], "00E5FF")
 
     def test_parse_relevant_uevent(self):
         self.assertEqual(
