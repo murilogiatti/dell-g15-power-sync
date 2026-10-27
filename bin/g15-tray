@@ -66,19 +66,19 @@ COLOR_PRESETS = (
 
 # (mode_key, label_pt, label_en)
 EFFECT_MODES = (
-    ("static", "Estático", "Static"),
-    ("breathing", "Respiração", "Breathing"),
-    ("pulse", "Pulso", "Pulse"),
-    ("morph", "Transição (2 Cores)", "Two-Color Morph"),
-    ("spectrum", "Ciclo de Cores", "Spectrum Cycle"),
-    ("rainbow", "Arco-Íris", "Rainbow Wave"),
+    ("static", "Estático (Cor Fixa)", "Static (Solid Color)"),
+    ("breathing", "Respiração (Fade Suave)", "Breathing (Smooth Fade)"),
+    ("pulse", "Pulso (Piscada Rápida)", "Pulse (Quick Flash)"),
+    ("morph", "Transição entre 2 Cores (Morph)", "Two-Color Transition (Morph)"),
+    ("spectrum", "Ciclo Contínuo de Cores (Spectrum)", "Continuous Color Cycle (Spectrum)"),
+    ("rainbow", "Ondas Arco-Íris por Zona (Rainbow)", "Per-Zone Rainbow Wave"),
 )
 
 # (profile_id, label_pt, label_en)
 POWER_PROFILES = (
-    ("power-saver", "Economia", "Power Saver"),
-    ("balanced", "Equilibrado", "Balanced"),
-    ("performance", "Desempenho (G-Mode)", "Performance (G-Mode)"),
+    ("power-saver", "🌱 Economia de Energia (Silencioso)", "🌱 Power Saver (Quiet)"),
+    ("balanced", "⚖️ Equilibrado (Padrão)", "⚖️ Balanced (Default)"),
+    ("performance", "🚀 Alto Desempenho (G-Mode)", "🚀 High Performance (G-Mode)"),
 )
 
 IS_PT = os.environ.get("LANG", "").lower().startswith("pt")
@@ -178,7 +178,7 @@ def read_telemetry():
 
 
 def format_telemetry_label(t):
-    return f"CPU {t['cpu_c']}°C • GPU {t['gpu_c']}°C • {t['fan1_rpm']}/{t['fan2_rpm']} RPM"
+    return f"🌡️ CPU {t['cpu_c']}°C • GPU {t['gpu_c']}°C • 💨 {t['fan1_rpm']}/{t['fan2_rpm']} RPM"
 
 
 def get_power_profile():
@@ -339,16 +339,15 @@ SNI_PATH = "/org/ayatana/NotificationItem/dell_g15"
 MENU_PATH = "/org/ayatana/NotificationItem/dell_g15/Menu"
 
 SWATCH_CSS = """
-button.g15-swatch {
-    min-width: 28px;
-    min-height: 22px;
-    padding: 0;
-    margin: 2px;
-    border-radius: 6px;
-    border: 1px solid rgba(255, 255, 255, 0.22);
+.g15-preset-btn {
+    padding: 5px 8px;
+    border-radius: 8px;
 }
-button.g15-swatch:hover {
-    border: 1px solid rgba(255, 255, 255, 0.85);
+.g15-dot {
+    min-width: 14px;
+    min-height: 14px;
+    border-radius: 99px;
+    border: 1px solid rgba(255, 255, 255, 0.35);
 }
 """
 
@@ -387,7 +386,7 @@ class G15ControlApp(Adw.Application):
             rule_lines = [SWATCH_CSS]
             for code, hex_val, _pt, _en in COLOR_PRESETS:
                 rule_lines.append(
-                    f"button.swatch-{code} {{ background: #{hex_val}; }}"
+                    f".dot-{code} {{ background: #{hex_val}; }}"
                 )
             css_prov.load_from_string("\n".join(rule_lines))
             Gtk.StyleContext.add_provider_for_display(
@@ -623,7 +622,10 @@ class G15ControlApp(Adw.Application):
                 {
                     "label": GLib.Variant(
                         "s",
-                        tr("Painel de Controle...", "Control Panel..."),
+                        tr(
+                            "🎛️ Abrir Painel de Controle...",
+                            "🎛️ Open Control Panel...",
+                        ),
                     )
                 },
                 action=self.present_control_window,
@@ -641,7 +643,10 @@ class G15ControlApp(Adw.Application):
                 {
                     "label": GLib.Variant(
                         "s",
-                        tr("Brilho Automático (Sync)", "Auto Brightness (Sync)"),
+                        tr(
+                            "🔄 Brilho Automático (Ambient Sync)",
+                            "🔄 Automatic Brightness (Ambient Sync)",
+                        ),
                     ),
                     "toggle-type": GLib.Variant("s", "radio"),
                     "toggle-state": GLib.Variant("i", 1 if sync_on else 0),
@@ -653,9 +658,9 @@ class G15ControlApp(Adw.Application):
         for idx, step in enumerate((100, 75, 50, 30, 10, 0)):
             item_id = 11 + idx
             if step == 0:
-                lbl = tr("Desligado (0%)", "Off (0%)")
+                lbl = tr("🌑 Desligar LEDs (0%)", "🌑 Turn Off LEDs (0%)")
             else:
-                lbl = tr(f"Brilho Fixo: {step}%", f"Fixed: {step}%")
+                lbl = tr(f"🔆 Brilho Fixo: {step}%", f"🔆 Fixed Brightness: {step}%")
             checked = (not sync_on) and (manual_val == step)
             root_children_ids.append(
                 register_node(
@@ -692,7 +697,7 @@ class G15ControlApp(Adw.Application):
         root_children_ids.append(
             register_node(
                 30,
-                {"label": GLib.Variant("s", tr("Cores Rápidas", "Quick Colors"))},
+                {"label": GLib.Variant("s", tr("🎨 Cores Rápidas", "🎨 Quick Colors"))},
                 child_ids=color_child_ids,
             )
         )
@@ -716,7 +721,7 @@ class G15ControlApp(Adw.Application):
         root_children_ids.append(
             register_node(
                 40,
-                {"label": GLib.Variant("s", tr("Efeitos", "Effects"))},
+                {"label": GLib.Variant("s", tr("✨ Efeitos do Teclado", "✨ Keyboard Effects"))},
                 child_ids=effect_child_ids,
             )
         )
@@ -741,7 +746,7 @@ class G15ControlApp(Adw.Application):
         root_children_ids.append(
             register_node(
                 50,
-                {"label": GLib.Variant("s", tr("Energia", "Power Profile"))},
+                {"label": GLib.Variant("s", tr("⚡ Perfil de Energia", "⚡ Power Profile"))},
                 child_ids=power_child_ids,
             )
         )
@@ -756,8 +761,8 @@ class G15ControlApp(Adw.Application):
                     "label": GLib.Variant(
                         "s",
                         tr(
-                            "Salvar na Memória do Teclado (Boot)",
-                            "Save to Keyboard Memory (Boot)",
+                            "💾 Salvar na Memória do Teclado (Boot)",
+                            "💾 Save to Keyboard Memory (Boot)",
                         ),
                     )
                 },
@@ -817,8 +822,8 @@ class G15ControlApp(Adw.Application):
         if self.window and hasattr(self, "_toast_overlay"):
             toast = Adw.Toast.new(
                 tr(
-                    "Gravado na memória interna do teclado (slot 0x0061).",
-                    "Saved to onboard keyboard memory (slot 0x0061).",
+                    "Perfil gravado na memória interna do teclado (slot 0x0061)!",
+                    "Profile saved to onboard keyboard memory (slot 0x0061)!",
                 )
             )
             self._toast_overlay.add_toast(toast)
@@ -905,7 +910,7 @@ class G15ControlApp(Adw.Application):
             fn()
         return False
 
-    # --- Sober & Minimalist GTK4 + Libadwaita Control Center ---
+    # --- GTK4 + Libadwaita Control Center ---
     def present_control_window(self):
         if self.window is None:
             self._build_control_window()
@@ -915,9 +920,9 @@ class G15ControlApp(Adw.Application):
 
     def _build_control_window(self):
         self.window = Adw.ApplicationWindow(application=self)
-        self.window.set_title("Dell G15 Control")
+        self.window.set_title("Dell G15 Control Center")
         self.window.set_icon_name("dell-g15-control")
-        self.window.set_default_size(500, 580)
+        self.window.set_default_size(580, 720)
         self.window.connect("close-request", self._on_window_close_request)
 
         self._toast_overlay = Adw.ToastOverlay()
@@ -929,28 +934,49 @@ class G15ControlApp(Adw.Application):
 
         # --- Group 1: Brightness & Ambient Sync ---
         grp_bright = Adw.PreferencesGroup(
-            title=tr("Brilho", "Brightness"),
+            title=tr("Iluminação e Brilho", "Backlight and Brightness"),
+            description=tr(
+                "Sincronize automaticamente com o brilho da tela ou ajuste um valor fixo.",
+                "Automatically synchronize with screen brightness or set a fixed level.",
+            ),
         )
 
         self._row_sync = Adw.SwitchRow(
-            title=tr("Sincronizar com a Tela (Ambient Sync)", "Sync with Screen (Ambient Sync)"),
+            title=tr("Brilho Automático (Ambient Sync)", "Automatic Brightness (Ambient Sync)"),
+            subtitle=tr(
+                "Ajusta a intensidade dos LEDs em tempo real conforme o brilho da tela",
+                "Adjusts keyboard LED intensity in real time as screen brightness changes",
+            ),
         )
         self._row_sync.connect("notify::active", self._on_ui_sync_toggled)
         grp_bright.add(self._row_sync)
 
         self._row_manual = Adw.ActionRow(
-            title=tr("Intensidade Manual", "Manual Intensity"),
+            title=tr("Intensidade Manual do Teclado", "Manual Keyboard Intensity"),
+            subtitle=tr(
+                "Deslize para definir o brilho fixo (0% desligado até 100% máximo)",
+                "Slide to set fixed brightness (0% off up to 100% maximum)",
+            ),
         )
         self._scale_manual = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0, 100, 5)
-        self._scale_manual.set_size_request(190, -1)
+        self._scale_manual.set_size_request(200, -1)
         self._scale_manual.set_draw_value(True)
         self._scale_manual.set_hexpand(True)
+        for mark in (0, 10, 30, 50, 75, 100):
+            self._scale_manual.add_mark(mark, Gtk.PositionType.BOTTOM, None)
         self._scale_manual.connect("value-changed", self._on_ui_manual_changed)
         self._row_manual.add_suffix(self._scale_manual)
         grp_bright.add(self._row_manual)
 
         self._row_power_cap = Adw.SwitchRow(
-            title=tr("Limitador de Pico (Cap 230)", "Peak Power Cap (230)"),
+            title=tr(
+                "Proteção do Limitador de Energia (Cap 230)",
+                "Power Limiter Protection (Cap 230)",
+            ),
+            subtitle=tr(
+                "Limita o pico RGB em #E6E6E6 para evitar quedas de brilho no controlador",
+                "Caps RGB peak at #E6E6E6 to prevent controller power-drop dimming",
+            ),
         )
         self._row_power_cap.connect("notify::active", self._on_ui_power_cap_toggled)
         grp_bright.add(self._row_power_cap)
@@ -958,11 +984,22 @@ class G15ControlApp(Adw.Application):
 
         # --- Group 2: Colors & Zones (Dynamic Unified vs 4-Zone View) ---
         grp_zones = Adw.PreferencesGroup(
-            title=tr("Cores e Zonas", "Colors and Zones"),
+            title=tr("Cores RGB e Zonas do Teclado", "RGB Colors and Keyboard Zones"),
+            description=tr(
+                "Use uma cor única para o teclado inteiro ou personalize cada uma das 4 regiões.",
+                "Use a single color for the whole keyboard or customize each of the 4 regions.",
+            ),
         )
 
         self._row_per_zone = Adw.SwitchRow(
-            title=tr("Separar em 4 Zonas Independentes", "Split into 4 Independent Zones"),
+            title=tr(
+                "Separar em 4 Zonas Independentes",
+                "Split into 4 Independent Zones",
+            ),
+            subtitle=tr(
+                "Permite escolher cores diferentes para WASD, Centro-Esq, Centro-Dir e NumPad",
+                "Allows choosing different colors for WASD, Center-Left, Center-Right and NumPad",
+            ),
         )
         self._row_per_zone.connect("notify::active", self._on_ui_per_zone_toggled)
         grp_zones.add(self._row_per_zone)
@@ -970,6 +1007,10 @@ class G15ControlApp(Adw.Application):
         # View A: Unified Whole-Keyboard Color Row (visible when per_zone == False)
         self._row_unified = Adw.ActionRow(
             title=tr("Cor do Teclado Inteiro", "Whole Keyboard Color"),
+            subtitle=tr(
+                "Clique no botão de cor ao lado para escolher uma cor personalizada para todas as teclas",
+                "Click the color button to pick a custom RGB color for all keys",
+            ),
         )
         unified_btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         unified_btn_box.set_valign(Gtk.Align.CENTER)
@@ -977,14 +1018,18 @@ class G15ControlApp(Adw.Application):
         self._btn_unified_1 = Gtk.ColorDialogButton(
             dialog=Gtk.ColorDialog(with_alpha=False)
         )
-        self._btn_unified_1.set_tooltip_text(tr("Cor Principal", "Primary Color"))
+        self._btn_unified_1.set_tooltip_text(
+            tr("Selecionar Cor Principal do Teclado", "Select Primary Keyboard Color")
+        )
         self._btn_unified_1.connect("notify::rgba", self._on_ui_unified_color_changed, False)
         unified_btn_box.append(self._btn_unified_1)
 
         self._btn_unified_2 = Gtk.ColorDialogButton(
             dialog=Gtk.ColorDialog(with_alpha=False)
         )
-        self._btn_unified_2.set_tooltip_text(tr("2ª Cor (Morph)", "2nd Color (Morph)"))
+        self._btn_unified_2.set_tooltip_text(
+            tr("Selecionar 2ª Cor (usada no efeito Transição/Morph)", "Select 2nd Color (used in Morph effect)")
+        )
         self._btn_unified_2.connect("notify::rgba", self._on_ui_unified_color_changed, True)
         unified_btn_box.append(self._btn_unified_2)
 
@@ -992,70 +1037,109 @@ class G15ControlApp(Adw.Application):
         grp_zones.add(self._row_unified)
 
         # View B: 4 Independent Zone Cards (visible ONLY when per_zone == True)
-        zones_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        zones_outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        zones_outer.set_margin_top(8)
+        zones_outer.set_margin_bottom(8)
+        zones_outer.set_margin_start(10)
+        zones_outer.set_margin_end(10)
+
+        lbl_zones_hint = Gtk.Label(
+            label=tr(
+                "Clique no seletor de cada região do teclado para alterar sua cor individual:",
+                "Click each keyboard region's picker to customize its individual color:",
+            ),
+            xalign=0,
+        )
+        lbl_zones_hint.add_css_class("dim-label")
+        lbl_zones_hint.add_css_class("caption")
+        zones_outer.append(lbl_zones_hint)
+
+        zones_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         zones_box.set_homogeneous(True)
-        zones_box.set_margin_top(6)
-        zones_box.set_margin_bottom(6)
-        zones_box.set_margin_start(6)
-        zones_box.set_margin_end(6)
 
         zone_titles = (
-            tr("Z1 WASD", "Z1 WASD"),
-            tr("Z2 Centro-E", "Z2 Center-L"),
-            tr("Z3 Centro-D", "Z3 Center-R"),
-            tr("Z4 NumPad", "Z4 NumPad"),
+            tr("Zona 1 (WASD)", "Zone 1 (WASD)"),
+            tr("Zona 2 (Centro-Esq)", "Zone 2 (Center-L)"),
+            tr("Zona 3 (Centro-Dir)", "Zone 3 (Center-R)"),
+            tr("Zona 4 (NumPad)", "Zone 4 (NumPad)"),
         )
         self._color_btns_1 = []
         self._color_btns_2 = []
 
         for idx in range(4):
-            card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+            card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
             card.add_css_class("card")
 
             lbl = Gtk.Label(label=zone_titles[idx])
-            lbl.set_margin_top(6)
+            lbl.set_margin_top(8)
             lbl.add_css_class("caption-heading")
             card.append(lbl)
 
             btn1 = Gtk.ColorDialogButton(dialog=Gtk.ColorDialog(with_alpha=False))
             btn1.set_halign(Gtk.Align.CENTER)
-            btn1.set_margin_bottom(6)
+            btn1.set_margin_bottom(8)
+            btn1.set_tooltip_text(f"{zone_titles[idx]} — {tr('Cor Principal', 'Primary Color')}")
             btn1.connect("notify::rgba", self._on_ui_zone_color_changed, idx, False)
             self._color_btns_1.append(btn1)
             card.append(btn1)
 
             btn2 = Gtk.ColorDialogButton(dialog=Gtk.ColorDialog(with_alpha=False))
             btn2.set_halign(Gtk.Align.CENTER)
-            btn2.set_margin_bottom(6)
-            btn2.set_tooltip_text(tr("2ª Cor (Morph)", "2nd Color (Morph)"))
+            btn2.set_margin_bottom(8)
+            btn2.set_tooltip_text(f"{zone_titles[idx]} — {tr('2ª Cor (Morph)', '2nd Color (Morph)')}")
             btn2.connect("notify::rgba", self._on_ui_zone_color_changed, idx, True)
             self._color_btns_2.append(btn2)
             card.append(btn2)
 
             zones_box.append(card)
 
+        zones_outer.append(zones_box)
         self._row_zone_cards = Adw.PreferencesRow(activatable=False)
-        self._row_zone_cards.set_child(zones_box)
+        self._row_zone_cards.set_child(zones_outer)
         grp_zones.add(self._row_zone_cards)
 
-        # Compact Palette of All 12 Pre-Selected Colors
-        palette_outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
-        palette_outer.set_margin_top(6)
-        palette_outer.set_margin_bottom(6)
-        palette_outer.set_margin_start(10)
-        palette_outer.set_margin_end(10)
+        # Named Grid of All 12 Pre-Selected Colors (3 rows x 4 columns)
+        palette_outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        palette_outer.set_margin_top(8)
+        palette_outer.set_margin_bottom(8)
+        palette_outer.set_margin_start(12)
+        palette_outer.set_margin_end(12)
 
-        swatches_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
-        swatches_box.set_halign(Gtk.Align.CENTER)
-        for code, hex_val, lbl_pt, lbl_en in COLOR_PRESETS:
-            sbtn = Gtk.Button()
-            sbtn.add_css_class("g15-swatch")
-            sbtn.add_css_class(f"swatch-{code}")
-            sbtn.set_tooltip_text(f"{tr(lbl_pt, lbl_en)} (#{hex_val})")
-            sbtn.connect("clicked", lambda _b, h=hex_val: self._apply_quick_color(h))
-            swatches_box.append(sbtn)
+        lbl_palette = Gtk.Label(
+            label=tr(
+                "Cores Pré-Selecionadas (clique em qualquer opção para aplicar no teclado):",
+                "Pre-Selected Colors (click any preset to apply to the keyboard):",
+            ),
+            xalign=0,
+        )
+        lbl_palette.add_css_class("dim-label")
+        lbl_palette.add_css_class("caption")
+        palette_outer.append(lbl_palette)
 
-        palette_outer.append(swatches_box)
+        grid = Gtk.Grid(column_spacing=6, row_spacing=6, column_homogeneous=True)
+        for idx, (code, hex_val, lbl_pt, lbl_en) in enumerate(COLOR_PRESETS):
+            btn = Gtk.Button()
+            btn.add_css_class("g15-preset-btn")
+            btn.set_tooltip_text(f"{tr(lbl_pt, lbl_en)} (#{hex_val})")
+
+            inner = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+            inner.set_halign(Gtk.Align.START)
+
+            dot = Gtk.Box()
+            dot.add_css_class("g15-dot")
+            dot.add_css_class(f"dot-{code}")
+            dot.set_valign(Gtk.Align.CENTER)
+            inner.append(dot)
+
+            txt = Gtk.Label(label=tr(lbl_pt, lbl_en))
+            txt.add_css_class("caption")
+            inner.append(txt)
+
+            btn.set_child(inner)
+            btn.connect("clicked", lambda _b, h=hex_val: self._apply_quick_color(h))
+            grid.attach(btn, idx % 4, idx // 4, 1, 1)
+
+        palette_outer.append(grid)
         row_palette = Adw.PreferencesRow(activatable=False)
         row_palette.set_child(palette_outer)
         grp_zones.add(row_palette)
@@ -1063,11 +1147,19 @@ class G15ControlApp(Adw.Application):
 
         # --- Group 3: Hardware Effects & Onboard Memory ---
         grp_fx = Adw.PreferencesGroup(
-            title=tr("Efeitos e Memória", "Effects and Memory"),
+            title=tr("Efeitos de Hardware e Memória", "Hardware Effects and Memory"),
+            description=tr(
+                "Animações executadas pelo próprio chip do teclado (zero uso de processador).",
+                "Animations executed directly by the keyboard chip (zero CPU usage).",
+            ),
         )
 
         self._row_mode = Adw.ComboRow(
-            title=tr("Efeito de Hardware", "Hardware Effect"),
+            title=tr("Efeito de Iluminação", "Lighting Effect"),
+            subtitle=tr(
+                "Escolha entre cor estática, respiração, pulso, transição (morph) ou arco-íris",
+                "Choose between static color, breathing, pulse, two-color morph or rainbow",
+            ),
         )
         mode_strings = Gtk.StringList.new([tr(pt, en) for _k, pt, en in EFFECT_MODES])
         self._row_mode.set_model(mode_strings)
@@ -1075,32 +1167,53 @@ class G15ControlApp(Adw.Application):
         grp_fx.add(self._row_mode)
 
         self._row_speed = Adw.ActionRow(
-            title=tr("Velocidade", "Speed"),
+            title=tr("Velocidade da Animação", "Animation Speed"),
+            subtitle=tr(
+                "Ajusta o ritmo do efeito (20 = lento e suave, 250 = rápido)",
+                "Adjusts effect tempo (20 = slow and smooth, 250 = fast)",
+            ),
         )
         self._scale_speed = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 20, 250, 10)
-        self._scale_speed.set_size_request(180, -1)
+        self._scale_speed.set_size_request(190, -1)
         self._scale_speed.set_draw_value(True)
         self._scale_speed.connect("value-changed", self._on_ui_speed_changed)
         self._row_speed.add_suffix(self._scale_speed)
         grp_fx.add(self._row_speed)
 
         row_boot = Adw.ActionRow(
-            title=tr("Memória Interna do Teclado (Boot)", "Onboard Keyboard Memory (Boot)"),
+            title=tr(
+                "Memória Interna do Teclado (Boot)",
+                "Onboard Keyboard Memory (Boot)",
+            ),
+            subtitle=tr(
+                "Grava a cor e efeito atuais no chip do teclado para ligar já configurado",
+                "Saves current color and effect to the keyboard chip so it powers on configured",
+            ),
         )
-        btn_boot = Gtk.Button(label=tr("Salvar", "Save"))
+        btn_boot = Gtk.Button(label=tr("💾 Salvar no Teclado", "💾 Save to Keyboard"))
         btn_boot.set_valign(Gtk.Align.CENTER)
+        btn_boot.set_tooltip_text(
+            tr(
+                "Gravar perfil no slot de usuário 0x0061 do microcontrolador do teclado",
+                "Write profile to user slot 0x0061 of the keyboard microcontroller",
+            )
+        )
         btn_boot.connect("clicked", lambda _b: self._trigger_save_boot())
         row_boot.add_suffix(btn_boot)
         grp_fx.add(row_boot)
         page.add(grp_fx)
 
-        # --- Group 4: Compact Telemetry & Power Profile ---
+        # --- Group 4: Telemetry & Power Profile ---
         grp_hw = Adw.PreferencesGroup(
-            title=tr("Sistema", "System"),
+            title=tr("Energia e Monitoramento Térmico", "Power and Thermal Monitoring"),
         )
 
         self._row_power = Adw.ComboRow(
-            title=tr("Perfil de Energia", "Power Profile"),
+            title=tr("Perfil Térmico e de Energia", "Thermal and Power Profile"),
+            subtitle=tr(
+                "Alterna entre Economia de bateria, Equilibrado ou Alto Desempenho (G-Mode)",
+                "Switches between Power Saver, Balanced or High Performance (G-Mode)",
+            ),
         )
         power_strings = Gtk.StringList.new([tr(pt, en) for _k, pt, en in POWER_PROFILES])
         self._row_power.set_model(power_strings)
@@ -1108,11 +1221,14 @@ class G15ControlApp(Adw.Application):
         grp_hw.add(self._row_power)
 
         self._row_telemetry = Adw.ActionRow(
-            title=tr("Sensores", "Sensors"),
+            title=tr("Sensores Internos (Ao Vivo)", "Internal Sensors (Live)"),
+            subtitle=tr(
+                "Temperaturas de CPU, GPU, SSD NVMe e rotação das ventoinhas (RPM)",
+                "CPU, GPU, NVMe SSD temperatures and cooling fan speeds (RPM)",
+            ),
         )
         self._lbl_telemetry = Gtk.Label(label="--")
         self._lbl_telemetry.add_css_class("monospace")
-        self._lbl_telemetry.add_css_class("dim-label")
         self._row_telemetry.add_suffix(self._lbl_telemetry)
         grp_hw.add(self._row_telemetry)
 
@@ -1134,7 +1250,7 @@ class G15ControlApp(Adw.Application):
             sync_on = bool(self.cfg.get("sync_screen", True))
             self._row_sync.set_active(sync_on)
             self._scale_manual.set_value(int(self.cfg.get("manual_brightness", 100)))
-            self._row_manual.set_visible(not sync_on)
+            self._row_manual.set_sensitive(not sync_on)
             self._row_power_cap.set_active(bool(self.cfg.get("power_cap", True)))
 
             per_zone = bool(self.cfg.get("per_zone", False))
@@ -1147,7 +1263,7 @@ class G15ControlApp(Adw.Application):
             )
             self._row_mode.set_selected(mode_idx)
             self._scale_speed.set_value(int(self.cfg.get("speed", 150)))
-            self._row_speed.set_visible(mode != "static")
+            self._row_speed.set_sensitive(mode != "static")
 
             # Toggle between Unified Color Row vs 4-Zone Cards
             self._row_unified.set_visible(not per_zone)
@@ -1194,7 +1310,7 @@ class G15ControlApp(Adw.Application):
         if self._updating_ui:
             return
         self.cfg["sync_screen"] = row.get_active()
-        self._row_manual.set_visible(not row.get_active())
+        self._row_manual.set_sensitive(not row.get_active())
         save_config(self.cfg)
         self._notify_menu_updated()
 
