@@ -91,8 +91,9 @@ class TestDellG15Daemon(unittest.TestCase):
         self.assertEqual(g15.compute_target_zone(38, True, 50), 30)
 
     def test_build_zone_packets_protocol_bytes(self):
+        zones_4 = (0x00, 0x01, 0x02, 0x03)
         # Screen off (zone 0) -> single 34-byte DIM=100 packet (0x26)
-        off_pkts = g15.build_zone_packets(0, g15.ZONES_STANDARD)
+        off_pkts = g15.build_zone_packets(0, zones_4)
         self.assertEqual(len(off_pkts), 1)
         self.assertEqual(len(off_pkts[0]), 34)
         self.assertEqual(
@@ -101,7 +102,7 @@ class TestDellG15Daemon(unittest.TestCase):
         )
 
         # Zone 100 -> DIM(0) first, NEW, 4x(SEL+ACT), and FINISH_PLAY as the final packet!
-        max_pkts = g15.build_zone_packets(100, g15.ZONES_STANDARD)
+        max_pkts = g15.build_zone_packets(100, zones_4)
         self.assertEqual(len(max_pkts), 11)
         # First packet must be DIM(0)
         self.assertEqual(

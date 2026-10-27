@@ -21,7 +21,7 @@ TARGET_HID_IDS = ("187C:00000550", "187C:00000551")
 REPORT_SIZE = 34
 HIDIOCSFEATURE_34 = 0xC0004806 | (REPORT_SIZE << 16)
 HIDIOCGFEATURE_34 = 0xC0004807 | (REPORT_SIZE << 16)
-PACKET_DELAY_SEC = 0.06
+PACKET_DELAY_SEC = 0.05
 DEBOUNCE_SEC = 0.15
 NETLINK_KOBJECT_UEVENT = 15
 
@@ -32,10 +32,14 @@ IN_CLOSE_WRITE = 0x00000008
 IN_NONBLOCK = 0x00000800
 IN_CLOEXEC = 0x00080000
 
-# Platform IDs using high zone indices (Dell G15 5520 / 5530) vs standard (5511 / 5515 / 5525 / 5535)
-ALT_ZONE_PLATFORMS = (0x0E07, 0x0E0A)
-ZONES_STANDARD = (0x00, 0x01, 0x02, 0x03)
-ZONES_ALT = (0x10, 0x11, 0x12, 0x13)
+# Platform IDs zone mapping table (matching OpenRGB's AlienwareController)
+PLATFORM_ZONES = {
+    0x0C01: (0x00, 0x01, 0x02, 0x03),  # Dell G5 SE 5505
+    0x0E03: (0x00, 0x01, 0x02, 0x03),  # Dell G15 5511
+    0x0E07: (0x10, 0x11, 0x12, 0x13),  # Dell G15 5520
+    0x0E0A: (0x10, 0x11, 0x12, 0x13),  # Dell G15 5530
+}
+ZONES_DEFAULT_16 = tuple(range(16))
 
 # --- Data-Oriented Brightness & Hysteresis Tables (SoA) ---
 # 5 active intensity tiers + 0 for DPMS Screen Off.
@@ -130,13 +134,13 @@ def build_packet(cmd_bytes):
     return buf
 
 
-def build_zone_packets(zone_level, zone_ids=ZONES_STANDARD):
+def build_zone_packets(zone_level, zone_ids=ZONES_DEFAULT_16):
     """
     Builds the exact 34-byte HID Feature report sequence for the AW-ELC controller.
-    CRITICAL HARDWARE RULE:
-    - Command 0x26 (DIM) MUST be sent BEFORE 0x21 0x00 0x01 (USER_ANIM_NEW).
-      Sending 0x26 after 0x21 0x00 0x03 (FINISH_PLAY) cancels the volatile 0xFFFF animation slot!
-    - Each zone in zone_ids is selected with 0x23 followed by 0x24 (ADD_ACTION), ending with 0x21 FINISH_PLAY.
+    Matches the exact packet sequence verified via LD_PRELOAD on Dell G15 5515 (0x0E05):
+    - Command 0x26 (DIM) is sent BEFORE 0x21 0x00 0x01 (USER_ANIM_NEW).
+    - Every hardware zone in zone_ids receives 0x23 (SELECT_ZONES) + 0x24 (ADD_ACTION).
+    - Ends with 0x21 0x00 0x03 0xFF 0xFF (USER_ANIM_FINISH_PLAY).
     """
     num_zones = len(zone_ids)
     if zone_level == 0:
@@ -168,13 +172,17 @@ def send_hid_packet(fd, pkt, delay=PACKET_DELAY_SEC):
 def detect_zone_ids(fd, delay=PACKET_DELAY_SEC):
     try:
         resp = send_hid_packet(fd, build_packet((0x20, 0x02)), delay=delay)
+        send_hid_packet(fd, build_packet((0x20, 0x00)), delay=delay)
         if resp[1] == 0x03:
             platform_id = (resp[4] << 8) | resp[5]
-            if platform_id in ALT_ZONE_PLATFORMS:
-                return ZONES_ALT
+            if platform_id in PLATFORM_ZONES:
+                return PLATFORM_ZONES[platform_id]
+            reported_count = resp[6]
+            if 1 <= reported_count <= 25:
+                return tuple(range(reported_count))
     except OSError:
         pass
-    return ZONES_STANDARD
+    return ZONES_DEFAULT_16
 
 
 def apply_zone_to_hardware(hidraw_path, zone_level, zone_ids=None, delay=PACKET_DELAY_SEC):
