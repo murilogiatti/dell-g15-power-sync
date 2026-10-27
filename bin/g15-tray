@@ -37,7 +37,7 @@ DEFAULT_CONFIG = {
     "sync_screen": True,
     "manual_brightness": 100,
     "mode": "static",
-    "speed": 150,
+    "speed": 40,
     "per_zone": False,
     "zones_rgb": ["E6E6E6", "E6E6E6", "E6E6E6", "E6E6E6"],
     "zones_rgb2": ["00E5FF", "00E5FF", "00E5FF", "00E5FF"],
@@ -1167,15 +1167,17 @@ class G15ControlApp(Adw.Application):
         grp_fx.add(self._row_mode)
 
         self._row_speed = Adw.ActionRow(
-            title=tr("Velocidade da Animação", "Animation Speed"),
+            title=tr("Velocidade da Animação (%)", "Animation Speed (%)"),
             subtitle=tr(
-                "Ajusta o ritmo do efeito (20 = lento e suave, 250 = rápido)",
-                "Adjusts effect tempo (20 = slow and smooth, 250 = fast)",
+                "Ajusta o ritmo do efeito (10% = bem lento e suave, 100% = rápido)",
+                "Adjusts effect tempo (10% = very slow and smooth, 100% = fast)",
             ),
         )
-        self._scale_speed = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 20, 250, 10)
+        self._scale_speed = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 10, 100, 5)
         self._scale_speed.set_size_request(190, -1)
         self._scale_speed.set_draw_value(True)
+        for mark in (10, 25, 50, 75, 100):
+            self._scale_speed.add_mark(mark, Gtk.PositionType.BOTTOM, None)
         self._scale_speed.connect("value-changed", self._on_ui_speed_changed)
         self._row_speed.add_suffix(self._scale_speed)
         grp_fx.add(self._row_speed)
@@ -1262,7 +1264,7 @@ class G15ControlApp(Adw.Application):
                 (i for i, (k, _pt, _en) in enumerate(EFFECT_MODES) if k == mode), 0
             )
             self._row_mode.set_selected(mode_idx)
-            self._scale_speed.set_value(int(self.cfg.get("speed", 150)))
+            self._scale_speed.set_value(max(10, min(100, int(self.cfg.get("speed", 40)))))
             self._row_speed.set_sensitive(mode != "static")
 
             # Toggle between Unified Color Row vs 4-Zone Cards

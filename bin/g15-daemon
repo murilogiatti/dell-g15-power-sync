@@ -73,7 +73,7 @@ DEFAULT_CONFIG = {
     "sync_screen": True,
     "manual_brightness": 100,
     "mode": "static",
-    "speed": 150,
+    "speed": 40,
     "per_zone": False,
     "zones_rgb": ["E6E6E6", "E6E6E6", "E6E6E6", "E6E6E6"],
     "zones_rgb2": ["00E5FF", "00E5FF", "00E5FF", "00E5FF"],
@@ -251,6 +251,23 @@ def build_mode_action_packet(actions):
     return build_packet(payload)
 
 
+def compute_anim_timing(mode, speed_perc):
+    """
+    Maps user speed percentage (10..100, where 10=slowest/calmest and 100=fastest)
+    to hardware (duration_ms, tempo) for the AW-ELC controller.
+    In AW-ELC firmware, LARGER duration/tempo values produce SLOWER transitions.
+    """
+    s = max(10, min(100, int(speed_perc)))
+    t_norm = (s - 10) / 90.0
+    if mode in ("spectrum", "rainbow"):
+        duration = int(round(2500 - t_norm * (2500 - DURATION_SPECTRUM)))
+        tempo = int(round(250 - t_norm * (250 - 25)))
+    else:
+        tempo = int(round(450 - t_norm * (450 - 50)))
+        duration = tempo * 10
+    return duration, tempo
+
+
 def build_zone_packets(zone_level, zone_ids=ZONES_DEFAULT_16, config=None, save_boot=False):
     """
     Builds the 34-byte HID Feature report sequence for the AW-ELC controller.
@@ -266,7 +283,8 @@ def build_zone_packets(zone_level, zone_ids=ZONES_DEFAULT_16, config=None, save_
     power_cap = bool(cfg.get("power_cap", True))
     per_zone = bool(cfg.get("per_zone", False))
     mode = str(cfg.get("mode", "static")).lower()
-    speed = max(20, min(250, int(cfg.get("speed", 150))))
+    speed = max(10, min(100, int(cfg.get("speed", 40))))
+    anim_duration, anim_tempo = compute_anim_timing(mode, speed)
 
     zones_hex1 = cfg.get("zones_rgb", DEFAULT_CONFIG["zones_rgb"])
     zones_hex2 = cfg.get("zones_rgb2", DEFAULT_CONFIG["zones_rgb2"])
@@ -298,27 +316,24 @@ def build_zone_packets(zone_level, zone_ids=ZONES_DEFAULT_16, config=None, save_
         packets.append(build_packet((0x23, 0x01, 0x00, 0x01, hw_zone)))
 
         if mode == "pulse":
-            period = max(500, speed * 10)
             packets.append(
-                build_mode_action_packet([(0x01, period, speed, r1, g1, b1)])
+                build_mode_action_packet([(0x01, anim_duration, anim_tempo, r1, g1, b1)])
             )
         elif mode == "breathing":
-            period = max(500, speed * 10)
             packets.append(
                 build_mode_action_packet(
                     [
-                        (0x02, period, speed, r1, g1, b1),
-                        (0x02, period, speed, 0, 0, 0),
+                        (0x02, anim_duration, anim_tempo, r1, g1, b1),
+                        (0x02, anim_duration, anim_tempo, 0, 0, 0),
                     ]
                 )
             )
         elif mode == "morph":
-            period = max(400, speed * 10)
             packets.append(
                 build_mode_action_packet(
                     [
-                        (0x02, period, speed, r1, g1, b1),
-                        (0x02, period, speed, r2, g2, b2),
+                        (0x02, anim_duration, anim_tempo, r1, g1, b1),
+                        (0x02, anim_duration, anim_tempo, r2, g2, b2),
                     ]
                 )
             )
@@ -334,7 +349,7 @@ def build_zone_packets(zone_level, zone_ids=ZONES_DEFAULT_16, config=None, save_
                         min(base_rgb[2], 230),
                     )
                 sr, sg, sb = scale_rgb(base_rgb, eff_level)
-                steps.append((0x02, DURATION_SPECTRUM, speed, sr, sg, sb))
+                steps.append((0x02, anim_duration, anim_tempo, sr, sg, sb))
             packets.append(build_mode_action_packet(steps[0:3]))
             packets.append(build_mode_action_packet(steps[3:6]))
             packets.append(build_mode_action_packet(steps[6:7]))
@@ -465,7 +480,7 @@ def make_state_signature(cfg, eff_level):
     return (
         eff_level,
         cfg.get("mode", "static"),
-        cfg.get("speed", 150),
+        cfg.get("speed", 40),
         cfg.get("per_zone", False),
         tuple(cfg.get("zones_rgb", ())),
         tuple(cfg.get("zones_rgb2", ())),

@@ -148,6 +148,19 @@ class TestDellG15Daemon(unittest.TestCase):
         self.assertEqual(list(boot_pkts[-2][:7]), [0x00, 0x03, 0x21, 0x00, 0x06, 0x00, 0x61])
         self.assertEqual(list(boot_pkts[-1][:7]), [0x00, 0x03, 0x21, 0x00, 0x07, 0x00, 0x61])
 
+        # Animation speed mapping: 10% (slowest) must have much larger duration/tempo than 100% (fastest)
+        slow_dur, slow_tempo = g15.compute_anim_timing("breathing", 10)
+        fast_dur, fast_tempo = g15.compute_anim_timing("breathing", 100)
+        self.assertGreater(slow_dur, fast_dur)
+        self.assertGreater(slow_tempo, fast_tempo)
+        self.assertEqual((slow_dur, slow_tempo), (4500, 450))
+        self.assertEqual((fast_dur, fast_tempo), (500, 50))
+
+        spec_slow_dur, spec_slow_tempo = g15.compute_anim_timing("rainbow", 10)
+        spec_fast_dur, spec_fast_tempo = g15.compute_anim_timing("rainbow", 100)
+        self.assertGreater(spec_slow_dur, spec_fast_dur)
+        self.assertGreater(spec_slow_tempo, spec_fast_tempo)
+
     def test_config_load_and_save_atomic(self):
         cfg_file = os.path.join(self.root, "config.json")
         cfg = g15.load_config(cfg_file)
