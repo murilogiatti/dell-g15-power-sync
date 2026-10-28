@@ -175,6 +175,12 @@ class TestDellG15Daemon(unittest.TestCase):
         self.assertEqual(reloaded["manual_brightness"], 75)
         self.assertEqual(reloaded["zones_rgb"][0], "00E5FF")
 
+        # Verify force_seq and g_mode are tracked in state signature so Fn+F5 / Fn+F9 always re-apply
+        sig1 = g15.make_state_signature(reloaded, 75)
+        reloaded["force_seq"] = reloaded.get("force_seq", 0) + 1
+        sig2 = g15.make_state_signature(reloaded, 75)
+        self.assertNotEqual(sig1, sig2)
+
     def test_parse_relevant_uevent(self):
         self.assertEqual(
             g15.parse_relevant_uevent(b"ACTION=change\0SUBSYSTEM=backlight\0"),

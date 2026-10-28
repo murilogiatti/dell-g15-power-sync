@@ -1,3 +1,7 @@
 # Dell G15 / Alienware AW-ELC LED Controller (Direct HIDRAW + USB access for active user session)
 SUBSYSTEMS=="usb|hidraw", ATTRS{idVendor}=="187c", ATTRS{idProduct}=="0550", TAG+="uaccess"
 SUBSYSTEMS=="usb|hidraw", ATTRS{idVendor}=="187c", ATTRS{idProduct}=="0551", TAG+="uaccess"
+
+# Dell G15 Hotkeys (Fn+F9 G-Mode & Fn+F5 Backlight events for active user session on Ubuntu & Fedora)
+SUBSYSTEM=="input", KERNEL=="event*", ATTRS{name}=="AT Translated Set 2 keyboard", TAG+="uaccess"
+SUBSYSTEM=="input", KERNEL=="event*", ATTRS{name}=="Dell WMI hotkeys", TAG+="uaccess"

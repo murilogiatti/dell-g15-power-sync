@@ -2,14 +2,16 @@
 """
 Dell G15 System Tray Indicator & GTK4/Libadwaita Control Center.
 Zero extra dependencies (uses system PyGObject: Gio, GLib, Gtk 4.0, Adw 1).
-Data-Oriented Design: flat lookup tables for presets, effects, brightness tiers, and sensors.
+Data-Oriented Design: flat lookup tables for presets, effects, brightness tiers, hotkeys, and sensors.
 """
 
 import glob
 import json
 import os
 import signal
+import struct
 import sys
+import time
 import warnings
 
 import gi
@@ -43,7 +45,32 @@ DEFAULT_CONFIG = {
     "zones_rgb2": ["00E5FF", "00E5FF", "00E5FF", "00E5FF"],
     "power_cap": True,
     "save_boot": False,
+    "g_mode": False,
+    "pre_gmode": None,
+    "force_seq": 0,
 }
+
+# --- Linux evdev Input Constants (Fn+F9 G-Mode & Fn+F5 Backlight Hotkeys) ---
+INPUT_EVENT_STRUCT = struct.Struct("llHHi")
+EV_KEY = 0x01
+EV_MSC = 0x04
+MSC_SCAN = 0x04
+
+# Scancodes & Keycodes emitted by Dell G15 / Alienware keyboards & WMI hotkeys
+GMODE_SCANCODES = (0x68, 0x12000C)
+GMODE_KEYCODES = (701, 594, 595)  # KEY_PERFORMANCE / G-Mode
+
+BACKLIGHT_SCANCODES = (
+    0x95,
+    0x10001E,
+    0x10001F,
+    0x100020,
+    0x100021,
+    0x100022,
+    0x100851,
+    0x100852,
+)
+BACKLIGHT_KEYCODES = (228, 229, 230, 659)  # KEY_KBDILLUMTOGGLE / DOWN / UP / MACRO4
 
 # --- Data-Oriented Lookup Tables ---
 BRIGHTNESS_STEPS = (0, 10, 30, 50, 75, 100)
@@ -372,6 +399,10 @@ class G15ControlApp(Adw.Application):
         self._menu_reg_id = 0
         self._watcher_sub_id = 0
         self._bus = None
+        self._last_notif_id = 0
+        self._last_gmode_ts = 0.0
+        self._last_backlight_ts = 0.0
+        self._evdev_fds = []
 
     def do_startup(self):
         Adw.Application.do_startup(self)
@@ -396,11 +427,16 @@ class G15ControlApp(Adw.Application):
         self._rebuild_menu_model()
         self._setup_dbus_tray()
         self._setup_config_monitor()
+        self._setup_hotkey_monitors()
         GLib.timeout_add_seconds(3, self._on_telemetry_tick)
 
     def do_command_line(self, command_line):
         args = command_line.get_arguments()[1:]
-        if "--show" in args or not self.start_hidden:
+        if "--toggle-gmode" in args:
+            self.toggle_g_mode(notify=True)
+        elif "--cycle-backlight" in args:
+            self.cycle_backlight_mode(notify=True)
+        elif "--show" in args or not self.start_hidden:
             self.present_control_window()
         else:
             self.start_hidden = False
@@ -408,6 +444,228 @@ class G15ControlApp(Adw.Application):
 
     def do_activate(self):
         self.present_control_window()
+
+    # --- Desktop Notifications (GNOME & KDE Plasma via org.freedesktop.Notifications) ---
+    def send_osd_notification(self, title, body):
+        if not self._bus:
+            return
+        icon_path = os.path.join(ASSETS_DIR, "logo.png")
+        icon = icon_path if os.path.exists(icon_path) else "input-keyboard"
+        try:
+            res = self._bus.call_sync(
+                "org.freedesktop.Notifications",
+                "/org/freedesktop/Notifications",
+                "org.freedesktop.Notifications",
+                "Notify",
+                GLib.Variant(
+                    "(susssasa{sv}i)",
+                    (
+                        "Dell G15 Control",
+                        int(self._last_notif_id),
+                        icon,
+                        title,
+                        body,
+                        [],
+                        {"transient": GLib.Variant("b", True)},
+                        2500,
+                    ),
+                ),
+                GLib.VariantType("(u)"),
+                Gio.DBusCallFlags.NONE,
+                1000,
+                None,
+            )
+            self._last_notif_id = res.unpack()[0]
+        except Exception:
+            pass
+
+    # --- Evdev Hotkey Monitors (Fn+F9 G-Mode & Fn+F5 Backlight) ---
+    def _setup_hotkey_monitors(self):
+        target_names = ("at translated set 2 keyboard", "dell wmi hotkeys", "alienware")
+        for sys_name_path in sorted(glob.glob("/sys/class/input/event*/device/name")):
+            try:
+                with open(sys_name_path, "r", encoding="utf-8") as f:
+                    dev_name = f.read().strip().lower()
+            except OSError:
+                continue
+            if not any(t in dev_name for t in target_names):
+                continue
+            event_basename = sys_name_path.split("/")[4]
+            dev_node = f"/dev/input/{event_basename}"
+            try:
+                fd = os.open(dev_node, os.O_RDONLY | os.O_NONBLOCK)
+                self._evdev_fds.append(fd)
+                GLib.io_add_watch(
+                    fd,
+                    GLib.IO_IN | GLib.IO_ERR | GLib.IO_HUP,
+                    self._on_evdev_readable,
+                )
+            except OSError:
+                continue
+
+    def _on_evdev_readable(self, fd, condition):
+        if condition & (GLib.IO_ERR | GLib.IO_HUP):
+            return False
+        pkt_size = INPUT_EVENT_STRUCT.size
+        while True:
+            try:
+                raw = os.read(fd, pkt_size * 16)
+                if not raw:
+                    break
+            except BlockingIOError:
+                break
+            except OSError:
+                return False
+
+            for offset in range(0, len(raw) - pkt_size + 1, pkt_size):
+                _sec, _usec, ev_type, ev_code, ev_value = INPUT_EVENT_STRUCT.unpack_from(
+                    raw, offset
+                )
+                self._process_input_event(ev_type, ev_code, ev_value)
+        return True
+
+    def _process_input_event(self, ev_type, ev_code, ev_value):
+        now = time.monotonic()
+        # 1. Match Fn+F9 (G-Mode / Game Shift)
+        is_gmode_scan = (
+            ev_type == EV_MSC and ev_code == MSC_SCAN and ev_value in GMODE_SCANCODES
+        )
+        is_gmode_key = (
+            ev_type == EV_KEY and ev_value == 1 and ev_code in GMODE_KEYCODES
+        )
+        if is_gmode_scan or is_gmode_key:
+            if now - self._last_gmode_ts > 0.35:
+                self._last_gmode_ts = now
+                self.toggle_g_mode(notify=True)
+            return
+
+        # 2. Match Fn+F5 (Keyboard Backlight Cycle)
+        is_bl_scan = (
+            ev_type == EV_MSC
+            and ev_code == MSC_SCAN
+            and ev_value in BACKLIGHT_SCANCODES
+        )
+        is_bl_key = (
+            ev_type == EV_KEY and ev_value == 1 and ev_code in BACKLIGHT_KEYCODES
+        )
+        if is_bl_scan or is_bl_key:
+            if now - self._last_backlight_ts > 0.25:
+                self._last_backlight_ts = now
+                self.cycle_backlight_mode(notify=True)
+
+    # --- Fn+F9 G-Mode Action (Performance Profile + G15 Red #FF2200) ---
+    def toggle_g_mode(self, target_state=None, notify=True):
+        cur_gmode = bool(self.cfg.get("g_mode", False))
+        new_gmode = (not cur_gmode) if target_state is None else bool(target_state)
+        if new_gmode == cur_gmode:
+            return
+
+        if new_gmode:
+            # Save current user lighting profile before switching to G-Mode Red
+            self.cfg["pre_gmode"] = {
+                "sync_screen": self.cfg.get("sync_screen", True),
+                "manual_brightness": self.cfg.get("manual_brightness", 100),
+                "mode": self.cfg.get("mode", "static"),
+                "per_zone": self.cfg.get("per_zone", False),
+                "zones_rgb": list(self.cfg.get("zones_rgb", DEFAULT_CONFIG["zones_rgb"])),
+            }
+            self.cfg["g_mode"] = True
+            self.cfg["sync_screen"] = False
+            self.cfg["manual_brightness"] = 100
+            self.cfg["mode"] = "static"
+            self.cfg["per_zone"] = False
+            self.cfg["zones_rgb"] = ["FF2200"] * 4
+            self.cfg["force_seq"] = int(self.cfg.get("force_seq", 0)) + 1
+            save_config(self.cfg)
+
+            if set_power_profile("performance"):
+                self.active_power_profile = "performance"
+
+            if notify:
+                self.send_osd_notification(
+                    tr("🚀 Modo G Ativado (Game Shift)", "🚀 G-Mode Enabled (Game Shift)"),
+                    tr(
+                        "Perfil em Alto Desempenho • Teclado em Vermelho G15 (100%)",
+                        "High Performance profile active • Keyboard set to G15 Red (100%)",
+                    ),
+                )
+        else:
+            # Restore user's pre-G-Mode lighting settings
+            pre = self.cfg.get("pre_gmode")
+            if isinstance(pre, dict):
+                self.cfg["sync_screen"] = bool(pre.get("sync_screen", True))
+                self.cfg["manual_brightness"] = int(pre.get("manual_brightness", 100))
+                self.cfg["mode"] = str(pre.get("mode", "static"))
+                self.cfg["per_zone"] = bool(pre.get("per_zone", False))
+                if isinstance(pre.get("zones_rgb"), list) and len(pre["zones_rgb"]) == 4:
+                    self.cfg["zones_rgb"] = list(pre["zones_rgb"])
+            else:
+                self.cfg["sync_screen"] = True
+                self.cfg["zones_rgb"] = ["E6E6E6"] * 4
+
+            self.cfg["g_mode"] = False
+            self.cfg["pre_gmode"] = None
+            self.cfg["force_seq"] = int(self.cfg.get("force_seq", 0)) + 1
+            save_config(self.cfg)
+
+            if set_power_profile("balanced"):
+                self.active_power_profile = "balanced"
+
+            if notify:
+                self.send_osd_notification(
+                    tr("⚖️ Modo G Desativado (Equilibrado)", "⚖️ G-Mode Disabled (Balanced)"),
+                    tr(
+                        "Perfil Equilibrado restaurado • Iluminação original ativa",
+                        "Balanced profile restored • Original keyboard lighting active",
+                    ),
+                )
+
+        self._notify_menu_updated()
+        self._sync_window_from_config()
+        self._update_window_telemetry()
+
+    # --- Fn+F5 Backlight Smart Cycle (Opção A: Sync -> 100% -> 50% -> 0%) ---
+    def cycle_backlight_mode(self, notify=True):
+        sync_on = bool(self.cfg.get("sync_screen", True))
+        manual_val = int(self.cfg.get("manual_brightness", 100))
+
+        if sync_on:
+            # Step 1 -> Fixed 100%
+            self.cfg["sync_screen"] = False
+            self.cfg["manual_brightness"] = 100
+            title = tr("🔆 Teclado: Brilho Fixo 100%", "🔆 Keyboard: Fixed Brightness 100%")
+            body = tr("Iluminação máxima constante ativada", "Constant maximum illumination active")
+        elif manual_val > 50:
+            # Step 2 -> Fixed 50%
+            self.cfg["sync_screen"] = False
+            self.cfg["manual_brightness"] = 50
+            title = tr("🔅 Teclado: Brilho Fixo 50%", "🔅 Keyboard: Fixed Brightness 50%")
+            body = tr("Iluminação intermediária (50%) ativada", "Medium illumination (50%) active")
+        elif manual_val > 0:
+            # Step 3 -> Off (0%)
+            self.cfg["sync_screen"] = False
+            self.cfg["manual_brightness"] = 0
+            title = tr("🌑 Teclado: LEDs Desligados (0%)", "🌑 Keyboard: LEDs Off (0%)")
+            body = tr("Iluminação do teclado desativada", "Keyboard backlight turned off")
+        else:
+            # Step 4 -> Back to Automatic Ambient Sync
+            self.cfg["sync_screen"] = True
+            self.cfg["manual_brightness"] = 100
+            title = tr(
+                "🔄 Teclado: Brilho Automático (Ambient Sync)",
+                "🔄 Keyboard: Auto Brightness (Ambient Sync)",
+            )
+            body = tr(
+                "Sincronizado automaticamente com o brilho da tela",
+                "Automatically synchronized with screen brightness",
+            )
+
+        self.cfg["force_seq"] = int(self.cfg.get("force_seq", 0)) + 1
+        save_config(self.cfg)
+        if notify:
+            self.send_osd_notification(title, body)
+        self._notify_menu_updated()
+        self._sync_window_from_config()
 
     # --- File Monitor for External Config Changes ---
     def _setup_config_monitor(self):
@@ -555,10 +813,7 @@ class G15ControlApp(Adw.Application):
             self.present_control_window()
             invocation.return_value(None)
         elif method == "SecondaryActivate":
-            self.cfg["sync_screen"] = not self.cfg.get("sync_screen", True)
-            save_config(self.cfg)
-            self._notify_menu_updated()
-            self._sync_window_from_config()
+            self.cycle_backlight_mode(notify=True)
             invocation.return_value(None)
         elif method == "ContextMenu":
             invocation.return_value(None)
@@ -576,9 +831,15 @@ class G15ControlApp(Adw.Application):
             key=lambda i: abs(BRIGHTNESS_STEPS[i] - curr),
         )
         new_idx = max(0, min(len(BRIGHTNESS_STEPS) - 1, nearest_idx + direction))
+        new_val = BRIGHTNESS_STEPS[new_idx]
         self.cfg["sync_screen"] = False
-        self.cfg["manual_brightness"] = BRIGHTNESS_STEPS[new_idx]
+        self.cfg["manual_brightness"] = new_val
+        self.cfg["force_seq"] = int(self.cfg.get("force_seq", 0)) + 1
         save_config(self.cfg)
+        self.send_osd_notification(
+            tr(f"🔆 Brilho do Teclado: {new_val}%", f"🔆 Keyboard Brightness: {new_val}%"),
+            tr("Ajustado via barra superior", "Adjusted via top bar"),
+        )
         self._notify_menu_updated()
         self._sync_window_from_config()
 
@@ -631,9 +892,29 @@ class G15ControlApp(Adw.Application):
                 action=self.present_control_window,
             )
         )
+
+        # 3. Quick G-Mode (Fn+F9) Toggle in Tray
+        gmode_active = bool(self.cfg.get("g_mode", False))
+        root_children_ids.append(
+            register_node(
+                4,
+                {
+                    "label": GLib.Variant(
+                        "s",
+                        tr(
+                            "🚀 Modo G / Game Shift (Fn+F9)",
+                            "🚀 G-Mode / Game Shift (Fn+F9)",
+                        ),
+                    ),
+                    "toggle-type": GLib.Variant("s", "checkmark"),
+                    "toggle-state": GLib.Variant("i", 1 if gmode_active else 0),
+                },
+                action=lambda: self.toggle_g_mode(notify=True),
+            )
+        )
         root_children_ids.append(register_sep(3))
 
-        # 3. Ambient Sync + Manual Brightness Radio Group
+        # 4. Ambient Sync + Manual Brightness Radio Group
         sync_on = bool(self.cfg.get("sync_screen", True))
         manual_val = int(self.cfg.get("manual_brightness", 100))
 
@@ -676,7 +957,7 @@ class G15ControlApp(Adw.Application):
 
         root_children_ids.append(register_sep(20))
 
-        # 4. Quick Color Presets Submenu
+        # 5. Quick Color Presets Submenu
         cur_hex = str(self.cfg.get("zones_rgb", ["E6E6E6"])[0]).upper()
         cur_per_zone = bool(self.cfg.get("per_zone", False))
         color_child_ids = []
@@ -702,7 +983,7 @@ class G15ControlApp(Adw.Application):
             )
         )
 
-        # 5. Hardware Effects Submenu
+        # 6. Hardware Effects Submenu
         cur_mode = str(self.cfg.get("mode", "static")).lower()
         effect_child_ids = []
         for idx, (m_key, lbl_pt, lbl_en) in enumerate(EFFECT_MODES):
@@ -726,7 +1007,7 @@ class G15ControlApp(Adw.Application):
             )
         )
 
-        # 6. Power Profiles Submenu
+        # 7. Power Profiles Submenu
         power_child_ids = []
         for idx, (prof_id, lbl_pt, lbl_en) in enumerate(POWER_PROFILES):
             pid = 51 + idx
@@ -753,7 +1034,7 @@ class G15ControlApp(Adw.Application):
 
         root_children_ids.append(register_sep(60))
 
-        # 7. Save to Keyboard Boot Memory (EEPROM 0x0061)
+        # 8. Save to Keyboard Boot Memory (EEPROM 0x0061)
         root_children_ids.append(
             register_node(
                 61,
@@ -791,6 +1072,7 @@ class G15ControlApp(Adw.Application):
     def _set_sync_or_manual(self, sync_screen, manual_brightness):
         self.cfg["sync_screen"] = bool(sync_screen)
         self.cfg["manual_brightness"] = int(manual_brightness)
+        self.cfg["force_seq"] = int(self.cfg.get("force_seq", 0)) + 1
         save_config(self.cfg)
         self._notify_menu_updated()
         self._sync_window_from_config()
@@ -800,12 +1082,14 @@ class G15ControlApp(Adw.Application):
         self.cfg["zones_rgb"] = [hex_val] * 4
         if self.cfg.get("mode") in ("spectrum", "rainbow"):
             self.cfg["mode"] = "static"
+        self.cfg["force_seq"] = int(self.cfg.get("force_seq", 0)) + 1
         save_config(self.cfg)
         self._notify_menu_updated()
         self._sync_window_from_config()
 
     def _apply_quick_mode(self, mode_key):
         self.cfg["mode"] = mode_key
+        self.cfg["force_seq"] = int(self.cfg.get("force_seq", 0)) + 1
         save_config(self.cfg)
         self._notify_menu_updated()
         self._sync_window_from_config()
@@ -813,12 +1097,24 @@ class G15ControlApp(Adw.Application):
     def _apply_power_profile(self, prof_id):
         if set_power_profile(prof_id):
             self.active_power_profile = prof_id
+            if prof_id != "performance" and self.cfg.get("g_mode"):
+                self.cfg["g_mode"] = False
+                save_config(self.cfg)
             self._notify_menu_updated()
             self._update_window_telemetry()
+            self._sync_window_from_config()
 
     def _trigger_save_boot(self):
         self.cfg["save_boot"] = True
+        self.cfg["force_seq"] = int(self.cfg.get("force_seq", 0)) + 1
         save_config(self.cfg)
+        self.send_osd_notification(
+            tr("💾 Memória do Teclado (Boot)", "💾 Keyboard Memory (Boot)"),
+            tr(
+                "Perfil gravado no chip do teclado (slot 0x0061)!",
+                "Profile saved to keyboard controller (slot 0x0061)!",
+            ),
+        )
         if self.window and hasattr(self, "_toast_overlay"):
             toast = Adw.Toast.new(
                 tr(
@@ -974,7 +1270,7 @@ class G15ControlApp(Adw.Application):
         self.window = Adw.ApplicationWindow(application=self)
         self.window.set_title("Dell G15 Control Center")
         self.window.set_icon_name("dell-g15-control")
-        self.window.set_default_size(680, 740)
+        self.window.set_default_size(680, 760)
         self.window.connect("close-request", self._on_window_close_request)
 
         self._toast_overlay = Adw.ToastOverlay()
@@ -986,10 +1282,10 @@ class G15ControlApp(Adw.Application):
 
         # --- Group 1: Brightness & Ambient Sync ---
         grp_bright = Adw.PreferencesGroup(
-            title=tr("Iluminação e Brilho", "Backlight and Brightness"),
+            title=tr("Iluminação e Brilho (Tecla Fn+F5)", "Backlight and Brightness (Fn+F5 Key)"),
             description=tr(
-                "Sincronize automaticamente com o brilho da tela ou ajuste um valor fixo.",
-                "Automatically synchronize with screen brightness or set a fixed level.",
+                "Sincronize automaticamente com a tela, ajuste manualmente ou use Fn+F5 para ciclar os modos.",
+                "Automatically sync with screen, adjust manually, or press Fn+F5 to cycle modes.",
             ),
         )
 
@@ -1006,8 +1302,8 @@ class G15ControlApp(Adw.Application):
         self._row_manual = Adw.ActionRow(
             title=tr("Intensidade Manual do Teclado", "Manual Keyboard Intensity"),
             subtitle=tr(
-                "Deslize para definir o brilho fixo (0% desligado até 100% máximo)",
-                "Slide to set fixed brightness (0% off up to 100% maximum)",
+                "Deslize ou use a roda do mouse (±5%) para definir o brilho fixo (0% a 100%)",
+                "Slide or scroll mouse wheel (±5%) to set fixed brightness (0% to 100%)",
             ),
         )
         self._scale_manual = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0, 100, 5)
@@ -1223,8 +1519,8 @@ class G15ControlApp(Adw.Application):
         self._row_speed = Adw.ActionRow(
             title=tr("Velocidade da Animação (%)", "Animation Speed (%)"),
             subtitle=tr(
-                "Ajusta o ritmo do efeito (10% = bem lento e suave, 100% = rápido)",
-                "Adjusts effect tempo (10% = very slow and smooth, 100% = fast)",
+                "Use a roda do mouse (±5%) para ajustar (10% = bem lento e suave, 100% = rápido)",
+                "Use mouse wheel (±5%) to adjust (10% = very slow and smooth, 100% = fast)",
             ),
         )
         self._scale_speed = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 10, 100, 5)
@@ -1260,10 +1556,23 @@ class G15ControlApp(Adw.Application):
         grp_fx.add(row_boot)
         page.add(grp_fx)
 
-        # --- Group 4: Telemetry & Power Profile ---
+        # --- Group 4: G-Mode (Fn+F9), Telemetry & Power Profile ---
         grp_hw = Adw.PreferencesGroup(
-            title=tr("Energia e Monitoramento Térmico", "Power and Thermal Monitoring"),
+            title=tr(
+                "Modo G (Fn+F9), Energia e Sensores",
+                "G-Mode (Fn+F9), Power and Sensors",
+            ),
         )
+
+        self._row_gmode = Adw.SwitchRow(
+            title=tr("🚀 Modo G / Game Shift (Tecla Fn+F9)", "🚀 G-Mode / Game Shift (Fn+F9 Key)"),
+            subtitle=tr(
+                "Ativa Alto Desempenho e aplica Vermelho G15 (100%); restaura seu perfil ao desligar",
+                "Activates High Performance and G15 Red (100%); restores your profile when disabled",
+            ),
+        )
+        self._row_gmode.connect("notify::active", self._on_ui_gmode_toggled)
+        grp_hw.add(self._row_gmode)
 
         self._row_power = Adw.ComboRow(
             title=tr("Perfil Térmico e de Energia", "Thermal and Power Profile"),
@@ -1311,6 +1620,7 @@ class G15ControlApp(Adw.Application):
             self._scale_manual.set_value(int(self.cfg.get("manual_brightness", 100)))
             self._row_manual.set_sensitive(not sync_on)
             self._row_power_cap.set_active(bool(self.cfg.get("power_cap", True)))
+            self._row_gmode.set_active(bool(self.cfg.get("g_mode", False)))
 
             per_zone = bool(self.cfg.get("per_zone", False))
             self._row_per_zone.set_active(per_zone)
@@ -1365,10 +1675,16 @@ class G15ControlApp(Adw.Application):
             self._updating_ui = False
 
     # --- UI Signal Handlers ---
+    def _on_ui_gmode_toggled(self, row, _pspec):
+        if self._updating_ui:
+            return
+        self.toggle_g_mode(target_state=row.get_active(), notify=True)
+
     def _on_ui_sync_toggled(self, row, _pspec):
         if self._updating_ui:
             return
         self.cfg["sync_screen"] = row.get_active()
+        self.cfg["force_seq"] = int(self.cfg.get("force_seq", 0)) + 1
         self._row_manual.set_sensitive(not row.get_active())
         save_config(self.cfg)
         self._notify_menu_updated()
@@ -1380,6 +1696,7 @@ class G15ControlApp(Adw.Application):
         if self.cfg.get("manual_brightness") != val:
             self.cfg["manual_brightness"] = val
             self.cfg["sync_screen"] = False
+            self.cfg["force_seq"] = int(self.cfg.get("force_seq", 0)) + 1
             save_config(self.cfg)
             self._notify_menu_updated()
 
@@ -1387,6 +1704,7 @@ class G15ControlApp(Adw.Application):
         if self._updating_ui:
             return
         self.cfg["power_cap"] = row.get_active()
+        self.cfg["force_seq"] = int(self.cfg.get("force_seq", 0)) + 1
         save_config(self.cfg)
 
     def _on_ui_per_zone_toggled(self, row, _pspec):
@@ -1396,6 +1714,7 @@ class G15ControlApp(Adw.Application):
         if not self.cfg["per_zone"]:
             c0 = self.cfg["zones_rgb"][0]
             self.cfg["zones_rgb"] = [c0] * 4
+        self.cfg["force_seq"] = int(self.cfg.get("force_seq", 0)) + 1
         save_config(self.cfg)
         self._sync_window_from_config()
         self._notify_menu_updated()
@@ -1408,6 +1727,7 @@ class G15ControlApp(Adw.Application):
         self.cfg[key] = [hex_val] * 4
         if not is_secondary and self.cfg.get("mode") in ("spectrum", "rainbow"):
             self.cfg["mode"] = "static"
+        self.cfg["force_seq"] = int(self.cfg.get("force_seq", 0)) + 1
         save_config(self.cfg)
         self._sync_window_from_config()
         self._notify_menu_updated()
@@ -1420,6 +1740,7 @@ class G15ControlApp(Adw.Application):
         self.cfg[key][zone_idx] = hex_val
         if not is_secondary and self.cfg.get("mode") in ("spectrum", "rainbow"):
             self.cfg["mode"] = "static"
+        self.cfg["force_seq"] = int(self.cfg.get("force_seq", 0)) + 1
         save_config(self.cfg)
         self._sync_window_from_config()
         self._notify_menu_updated()
@@ -1430,6 +1751,7 @@ class G15ControlApp(Adw.Application):
         idx = row.get_selected()
         if 0 <= idx < len(EFFECT_MODES):
             self.cfg["mode"] = EFFECT_MODES[idx][0]
+            self.cfg["force_seq"] = int(self.cfg.get("force_seq", 0)) + 1
             save_config(self.cfg)
             self._sync_window_from_config()
             self._notify_menu_updated()
@@ -1440,6 +1762,7 @@ class G15ControlApp(Adw.Application):
         val = int(round(scale.get_value()))
         if self.cfg.get("speed") != val:
             self.cfg["speed"] = val
+            self.cfg["force_seq"] = int(self.cfg.get("force_seq", 0)) + 1
             save_config(self.cfg)
 
     def _on_ui_power_profile_changed(self, row, _pspec):
@@ -1450,13 +1773,19 @@ class G15ControlApp(Adw.Application):
             prof_id = POWER_PROFILES[idx][0]
             if set_power_profile(prof_id):
                 self.active_power_profile = prof_id
+                if prof_id != "performance" and self.cfg.get("g_mode"):
+                    self.cfg["g_mode"] = False
+                    save_config(self.cfg)
+                    self._sync_window_from_config()
                 self._notify_menu_updated()
 
 
 def main():
     signal.signal(signal.SIGINT, signal.SIG_DFL)
     signal.signal(signal.SIGTERM, lambda *_a: sys.exit(0))
-    start_hidden = "--show" not in sys.argv
+    start_hidden = not any(
+        flag in sys.argv for flag in ("--show", "--toggle-gmode", "--cycle-backlight")
+    )
     app = G15ControlApp(start_hidden=start_hidden)
     return app.run(sys.argv)
 

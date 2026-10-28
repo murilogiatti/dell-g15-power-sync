@@ -79,6 +79,9 @@ DEFAULT_CONFIG = {
     "zones_rgb2": ["00E5FF", "00E5FF", "00E5FF", "00E5FF"],
     "power_cap": True,
     "save_boot": False,
+    "g_mode": False,
+    "pre_gmode": None,
+    "force_seq": 0,
 }
 
 # Configurable roots (overridable in unit tests)
@@ -485,6 +488,8 @@ def make_state_signature(cfg, eff_level):
         tuple(cfg.get("zones_rgb", ())),
         tuple(cfg.get("zones_rgb2", ())),
         cfg.get("power_cap", True),
+        cfg.get("g_mode", False),
+        cfg.get("force_seq", 0),
     )
 
 

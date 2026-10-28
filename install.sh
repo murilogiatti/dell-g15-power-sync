@@ -95,7 +95,7 @@ if ! cmp -s "$SCRIPT_DIR/udev/10-alienware.rules" "/etc/udev/rules.d/10-alienwar
         echo "$MSG_UDEV"
         sudo cp "$SCRIPT_DIR/udev/10-alienware.rules" /etc/udev/rules.d/10-alienware.rules
         sudo udevadm control --reload-rules
-        sudo udevadm trigger --subsystem-match=hidraw --subsystem-match=usb
+        sudo udevadm trigger --subsystem-match=hidraw --subsystem-match=usb --subsystem-match=input
     fi
 fi
 
