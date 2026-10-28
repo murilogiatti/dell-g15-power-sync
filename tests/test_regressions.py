@@ -325,6 +325,9 @@ runpy.run_path(sys.argv[0],run_name='__main__')
 class GtkFeedback(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        ok, _, _ = core.check_backend_dependencies('gtk')
+        if not ok:
+            raise unittest.SkipTest('GTK dependencies unavailable')
         try:
             import g15_gtk
         except (ImportError, ValueError):
