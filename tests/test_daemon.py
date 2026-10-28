@@ -19,7 +19,19 @@ def load_daemon_module():
     return module
 
 
+def load_tray_module():
+    tray_path = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "bin", "g15-tray")
+    )
+    loader = importlib.machinery.SourceFileLoader("g15_tray", tray_path)
+    spec = importlib.util.spec_from_loader("g15_tray", loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
 g15 = load_daemon_module()
+g15_tray = load_tray_module()
 
 
 class TestDellG15Daemon(unittest.TestCase):
@@ -193,6 +205,142 @@ class TestDellG15Daemon(unittest.TestCase):
         self.assertIsNone(
             g15.parse_relevant_uevent(b"ACTION=change\0SUBSYSTEM=power_supply\0")
         )
+
+    def test_invalid_config_values_are_sanitized_without_crashing(self):
+        cfg_file = os.path.join(self.root, "bad_config.json")
+        with open(cfg_file, "w", encoding="utf-8") as f:
+            f.write(
+                '{"speed": null, "manual_brightness": "abc", "sync_screen": "no", '
+                '"mode": "invalid_fx", "zones_rgb": ["ZZZZZZ", 123, null, "#112233"], '
+                '"force_seq": "bad"}'
+            )
+
+        cfg = g15.load_config(cfg_file)
+        self.assertEqual(cfg["speed"], 40)
+        self.assertEqual(cfg["manual_brightness"], 100)
+        self.assertTrue(cfg["sync_screen"])
+        self.assertEqual(cfg["mode"], "static")
+        self.assertEqual(cfg["zones_rgb"], ["E6E6E6", "E6E6E6", "E6E6E6", "112233"])
+        self.assertEqual(cfg["force_seq"], 0)
+
+        # Must also build packets and compute effective state cleanly
+        eff, _auto = g15.compute_effective_state(cfg, 50, True, -1)
+        pkts = g15.build_zone_packets(eff, (0, 1, 2, 3), config=cfg)
+        self.assertEqual(len(pkts), 11)
+
+        # Tray config normalizer must behave identically
+        tray_cfg = g15_tray.load_config(cfg_file)
+        self.assertEqual(tray_cfg["speed"], 40)
+        self.assertEqual(tray_cfg["manual_brightness"], 100)
+
+    def test_rebuild_inotify_watches_on_backlight_recreation(self):
+        bl1 = self._create_mock_backlight("amdgpu_bl0", 50, 100)
+        ifd1 = g15.open_inotify_watches(bl1, config_dir=self.root)
+        self.assertGreaterEqual(ifd1, 0)
+
+        bl2 = self._create_mock_backlight("amdgpu_bl2", 80, 100)
+        ifd2 = g15.rebuild_inotify_watches(ifd1, bl2, config_dir=self.root)
+        self.assertGreaterEqual(ifd2, 0)
+        os.close(ifd2)
+
+    def test_atomic_updater_pins_commit_and_rolls_back_on_failure(self):
+        dest_a = os.path.join(self.root, "bin", "g15-daemon")
+        dest_b = os.path.join(self.root, "assets", "banner.svg")
+        os.makedirs(os.path.dirname(dest_a), exist_ok=True)
+        os.makedirs(os.path.dirname(dest_b), exist_ok=True)
+        with open(dest_a, "wb") as f:
+            f.write(b"print('old_daemon')\n")
+        with open(dest_b, "wb") as f:
+            f.write(b"<svg>old</svg>")
+
+        files_map = (
+            ("bin/g15-daemon", dest_a, 0o755),
+            ("assets/banner.svg", dest_b, 0o644),
+        )
+        requested_urls = []
+
+        def fake_fetch_ok(url):
+            requested_urls.append(url)
+            if url.endswith("bin/g15-daemon"):
+                return b"print('new_daemon')\n"
+            return b"<svg>new</svg>"
+
+        sha = "a1b2c3d4e5f60123456789abcdef0123456789ab"
+        g15_tray.stage_and_apply_update(sha, files_map=files_map, fetcher=fake_fetch_ok)
+        self.assertTrue(all(sha in u for u in requested_urls))
+        with open(dest_a, "rb") as f:
+            self.assertEqual(f.read(), b"print('new_daemon')\n")
+
+        # Now simulate a syntax error in a downloaded Python binary: existing files must remain untouched
+        def fake_fetch_corrupt(url):
+            if url.endswith("bin/g15-daemon"):
+                return b"def broken_syntax(:\n"
+            return b"<svg>corrupt</svg>"
+
+        with self.assertRaises(SyntaxError):
+            g15_tray.stage_and_apply_update(
+                "deadbeef", files_map=files_map, fetcher=fake_fetch_corrupt
+            )
+        with open(dest_a, "rb") as f:
+            self.assertEqual(f.read(), b"print('new_daemon')\n")
+
+    def test_gmode_restores_previous_power_profile_and_reports_failure(self):
+        app = g15_tray.G15ControlApp(start_hidden=True)
+        app.cfg = g15_tray.normalize_config({"zones_rgb": ["00E5FF"] * 4, "mode": "breathing"})
+        notified = []
+        app.send_osd_notification = lambda title, body: notified.append((title, body))
+
+        orig_get = g15_tray.get_power_profile
+        orig_set = g15_tray.set_power_profile
+        orig_save = g15_tray.save_config
+        try:
+            g15_tray.save_config = lambda _c: None
+            # Case 1: User starts in power-saver, G-Mode succeeds, then disabling restores power-saver
+            g15_tray.get_power_profile = lambda: "power-saver"
+            set_calls = []
+            g15_tray.set_power_profile = lambda p: (set_calls.append(p) or True)
+
+            app.toggle_g_mode(target_state=True, notify=True)
+            self.assertEqual(set_calls[-1], "performance")
+            self.assertEqual(app.cfg["pre_gmode"]["power_profile"], "power-saver")
+
+            app.toggle_g_mode(target_state=False, notify=True)
+            self.assertEqual(set_calls[-1], "power-saver")
+            self.assertEqual(app.cfg["mode"], "breathing")
+
+            # Case 2: set_power_profile fails -> notification must NOT claim High Performance succeeded
+            notified.clear()
+            g15_tray.set_power_profile = lambda _p: False
+            app.toggle_g_mode(target_state=True, notify=True)
+            self.assertTrue(
+                "indisponível" in notified[-1][1].lower()
+                or "unavailable" in notified[-1][1].lower()
+            )
+        finally:
+            g15_tray.get_power_profile = orig_get
+            g15_tray.set_power_profile = orig_set
+            g15_tray.save_config = orig_save
+
+    def test_save_boot_waits_for_daemon_confirmation(self):
+        app = g15_tray.G15ControlApp(start_hidden=True)
+        notified = []
+        app.send_osd_notification = lambda title, body: notified.append((title, body))
+        orig_save = g15_tray.save_config
+        try:
+            g15_tray.save_config = lambda _c: None
+            app._trigger_save_boot()
+            # Immediately after requesting save_boot, no premature success notification is sent
+            self.assertEqual(len(notified), 0)
+            expected_seq = app._pending_boot_seq
+            self.assertGreater(expected_seq, 0)
+
+            # Simulate daemon writing save_boot_status={"seq": expected_seq, "ok": False}
+            app.cfg["save_boot_status"] = {"seq": expected_seq, "ok": False}
+            app._check_save_boot_feedback()
+            self.assertEqual(len(notified), 1)
+            self.assertTrue("❌" in notified[-1][0])
+        finally:
+            g15_tray.save_config = orig_save
 
 
 if __name__ == "__main__":

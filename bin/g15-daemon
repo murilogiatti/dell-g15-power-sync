@@ -69,6 +69,8 @@ RAINBOW_STEPS = (
     (128, 0, 128),
 )
 
+VALID_MODES = ("static", "breathing", "pulse", "morph", "spectrum", "rainbow")
+
 DEFAULT_CONFIG = {
     "sync_screen": True,
     "manual_brightness": 100,
@@ -79,6 +81,7 @@ DEFAULT_CONFIG = {
     "zones_rgb2": ["00E5FF", "00E5FF", "00E5FF", "00E5FF"],
     "power_cap": True,
     "save_boot": False,
+    "save_boot_status": None,
     "g_mode": False,
     "pre_gmode": None,
     "force_seq": 0,
@@ -93,29 +96,107 @@ CONFIG_DIR = os.path.join(
 CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
 
 
-def load_config(path=None):
-    cfg_path = path or CONFIG_PATH
+def _sanitize_hex_color(val, fallback):
+    clean = str(val or "").lstrip("#").strip().upper()
+    if len(clean) == 6:
+        try:
+            int(clean, 16)
+            return clean
+        except ValueError:
+            pass
+    return fallback
+
+
+def _safe_int(val, default, min_val=None, max_val=None):
+    if isinstance(val, bool) or val is None:
+        res = default
+    else:
+        try:
+            res = int(float(val)) if isinstance(val, float) else int(val)
+        except (TypeError, ValueError):
+            res = default
+    if min_val is not None:
+        res = max(min_val, res)
+    if max_val is not None:
+        res = min(max_val, res)
+    return res
+
+
+def normalize_config(raw):
     cfg = dict(DEFAULT_CONFIG)
     cfg["zones_rgb"] = list(DEFAULT_CONFIG["zones_rgb"])
     cfg["zones_rgb2"] = list(DEFAULT_CONFIG["zones_rgb2"])
+    if not isinstance(raw, dict):
+        return cfg
+
+    for bool_key in ("sync_screen", "per_zone", "power_cap", "save_boot", "g_mode"):
+        if isinstance(raw.get(bool_key), bool):
+            cfg[bool_key] = raw[bool_key]
+
+    cfg["manual_brightness"] = _safe_int(raw.get("manual_brightness"), 100, 0, 100)
+    cfg["speed"] = _safe_int(raw.get("speed"), 40, 10, 100)
+    cfg["force_seq"] = _safe_int(raw.get("force_seq"), 0, 0, 2_000_000_000)
+
+    raw_mode = raw.get("mode")
+    if isinstance(raw_mode, str) and raw_mode.strip().lower() in VALID_MODES:
+        cfg["mode"] = raw_mode.strip().lower()
+
+    for key, fallback in (("zones_rgb", "E6E6E6"), ("zones_rgb2", "00E5FF")):
+        arr = raw.get(key)
+        if isinstance(arr, list) and len(arr) >= 4:
+            cfg[key] = [_sanitize_hex_color(x, fallback) for x in arr[:4]]
+        else:
+            cfg[key] = [fallback] * 4
+
+    pre = raw.get("pre_gmode")
+    if isinstance(pre, dict):
+        pre_mode = str(pre.get("mode", "static")).strip().lower()
+        if pre_mode not in VALID_MODES:
+            pre_mode = "static"
+        pre_zones = pre.get("zones_rgb")
+        if isinstance(pre_zones, list) and len(pre_zones) >= 4:
+            norm_pre_zones = [_sanitize_hex_color(x, "E6E6E6") for x in pre_zones[:4]]
+        else:
+            norm_pre_zones = list(DEFAULT_CONFIG["zones_rgb"])
+        pre_prof = pre.get("power_profile")
+        if not isinstance(pre_prof, str) or pre_prof not in (
+            "power-saver",
+            "balanced",
+            "performance",
+        ):
+            pre_prof = "balanced"
+        cfg["pre_gmode"] = {
+            "mode": pre_mode,
+            "per_zone": bool(pre.get("per_zone", False))
+            if isinstance(pre.get("per_zone"), bool)
+            else False,
+            "zones_rgb": norm_pre_zones,
+            "power_profile": pre_prof,
+        }
+    else:
+        cfg["pre_gmode"] = None
+
+    sbs = raw.get("save_boot_status")
+    if isinstance(sbs, dict) and isinstance(sbs.get("ok"), bool):
+        cfg["save_boot_status"] = {
+            "seq": _safe_int(sbs.get("seq"), 0, 0, 2_000_000_000),
+            "ok": sbs["ok"],
+        }
+    else:
+        cfg["save_boot_status"] = None
+
+    return cfg
+
+
+def load_config(path=None):
+    cfg_path = path or CONFIG_PATH
+    raw = None
     try:
         with open(cfg_path, "r", encoding="utf-8") as f:
             raw = json.load(f)
-        if isinstance(raw, dict):
-            for k in DEFAULT_CONFIG:
-                if k in raw:
-                    cfg[k] = raw[k]
     except (OSError, ValueError):
         pass
-
-    # Normalize arrays to 4 zones
-    for key, fallback in (("zones_rgb", "E6E6E6"), ("zones_rgb2", "00E5FF")):
-        arr = cfg.get(key)
-        if not isinstance(arr, list) or len(arr) < 4:
-            cfg[key] = [fallback] * 4
-        else:
-            cfg[key] = [str(x).lstrip("#").upper()[:6] or fallback for x in arr[:4]]
-    return cfg
+    return normalize_config(raw)
 
 
 def save_config(cfg, path=None):
@@ -459,6 +540,15 @@ def open_inotify_watches(backlight_dir, config_dir=None):
         return -1
 
 
+def rebuild_inotify_watches(old_ifd, backlight_dir, config_dir=None):
+    if old_ifd >= 0:
+        try:
+            os.close(old_ifd)
+        except OSError:
+            pass
+    return open_inotify_watches(backlight_dir, config_dir=config_dir)
+
+
 def parse_relevant_uevent(raw_bytes):
     """Returns 'backlight', 'hidraw', or None from a kernel uevent datagram."""
     text = raw_bytes.decode("utf-8", errors="ignore")
@@ -563,8 +653,16 @@ def run_daemon():
                 pending_rebind = False
 
             if pending_sync:
-                if not backlight_dir or not os.path.isdir(backlight_dir):
-                    backlight_dir = resolve_backlight_dir()
+                new_bl_dir = (
+                    backlight_dir
+                    if (backlight_dir and os.path.isdir(backlight_dir))
+                    else resolve_backlight_dir()
+                )
+                if new_bl_dir != backlight_dir:
+                    backlight_dir = new_bl_dir
+                    ifd = rebuild_inotify_watches(ifd, backlight_dir)
+                    watch_fds = [sock] + ([ifd] if ifd >= 0 else [])
+
                 cfg = load_config()
                 perc, screen_on = read_screen_state(backlight_dir)
                 eff_level, current_auto_zone = compute_effective_state(
@@ -572,14 +670,18 @@ def run_daemon():
                 )
 
                 if cfg.get("save_boot"):
+                    boot_ok, zone_ids = apply_zone_to_hardware(
+                        hidraw_path, eff_level, zone_ids, config=cfg, save_boot=True
+                    )
                     cfg["save_boot"] = False
+                    cfg["save_boot_status"] = {
+                        "seq": int(cfg.get("force_seq", 0)),
+                        "ok": bool(boot_ok),
+                    }
                     try:
                         save_config(cfg)
                     except OSError:
                         pass
-                    apply_zone_to_hardware(
-                        hidraw_path, eff_level, zone_ids, config=cfg, save_boot=True
-                    )
                     last_sig = None
 
                 new_sig = make_state_signature(cfg, eff_level)

@@ -15,10 +15,10 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v5
 
-      - name: Install shellcheck
+      - name: Install shellcheck and PyGObject / GTK4 / Libadwaita
         run: |
           sudo apt-get update
-          sudo apt-get install -y shellcheck
+          sudo apt-get install -y shellcheck python3-gi gir1.2-gtk-4.0 gir1.2-adw-1
 
       - name: Run Shellcheck on installer scripts
         run: shellcheck install.sh uninstall.sh

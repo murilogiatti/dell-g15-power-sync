@@ -8,8 +8,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LANG_CODE="${LANG%%_*}"
 if [ "$LANG_CODE" == "pt" ]; then
     MSG_START="--- Dell G15 Ambient Sync & Control Center Instalador ---"
-    MSG_CHECK="-> Verificando Python 3..."
+    MSG_CHECK="-> Verificando Python 3 e dependências gráficas (PyGObject / GTK4 / Libadwaita)..."
     MSG_ERROR="Erro: python3 não está instalado."
+    MSG_GI_ERROR="Erro: PyGObject, GTK 4.0 ou Libadwaita 1 não foram encontrados.\n   No Ubuntu/Debian instale: sudo apt install python3-gi gir1.2-gtk-4.0 gir1.2-adw-1\n   No Fedora instale: sudo dnf install python3-gobject gtk4 libadwaita"
     MSG_CLEAN="-> Limpando versões e serviços antigos (migração limpa)..."
     MSG_SCRIPTS="-> Binários e ícones instalados em ~/.local/"
     MSG_SERVICE="-> Serviços Systemd e atalho de aplicativo configurados"
@@ -17,8 +18,9 @@ if [ "$LANG_CODE" == "pt" ]; then
     MSG_DONE="--------------------------------------\nInstalação concluída! O daemon e o ícone na barra superior estão ativos."
 else
     MSG_START="--- Dell G15 Ambient Sync & Control Center Installer ---"
-    MSG_CHECK="-> Checking for Python 3..."
+    MSG_CHECK="-> Checking Python 3 and GUI dependencies (PyGObject / GTK4 / Libadwaita)..."
     MSG_ERROR="Error: python3 is not installed."
+    MSG_GI_ERROR="Error: PyGObject, GTK 4.0 or Libadwaita 1 not found.\n   On Ubuntu/Debian run: sudo apt install python3-gi gir1.2-gtk-4.0 gir1.2-adw-1\n   On Fedora run: sudo dnf install python3-gobject gtk4 libadwaita"
     MSG_CLEAN="-> Cleaning up legacy files and services (clean migration)..."
     MSG_SCRIPTS="-> Binaries and icons installed in ~/.local/"
     MSG_SERVICE="-> Systemd user services and desktop shortcut configured"
@@ -28,11 +30,17 @@ fi
 
 echo -e "$MSG_START"
 
-# 1. Check Python 3
+# 1. Check Python 3 + PyGObject / GTK 4.0 / Adw 1 before stopping services or copying files
 echo "$MSG_CHECK"
 if ! command -v python3 &> /dev/null; then
     echo "$MSG_ERROR"
     exit 1
+fi
+if [ "${SKIP_GUI_CHECK:-0}" != "1" ]; then
+    if ! python3 -c 'import gi; gi.require_version("Gtk", "4.0"); gi.require_version("Adw", "1"); from gi.repository import Gtk, Adw, Gio, GLib' &> /dev/null; then
+        echo -e "$MSG_GI_ERROR"
+        exit 1
+    fi
 fi
 
 # 2. Clean migration from any legacy version (v1-v5)
