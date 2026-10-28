@@ -731,7 +731,7 @@ def restore_previous_update(version_file=None, files_map=None):
     with config_lock(path):
         with open(path, encoding="utf-8") as stream:
             records = json.load(stream)
-        if not isinstance(records, list) or any(r.get("path") not in allowed for r in records):
+        if not isinstance(records, list) or any(not isinstance(r, dict) or r.get("path") not in allowed for r in records):
             raise ValueError("Invalid rollback destinations")
         prepared, previous, applied = [], [], []
         import tempfile
@@ -747,10 +747,12 @@ def restore_previous_update(version_file=None, files_map=None):
                 tmp = None
                 if content is not None:
                     fd, tmp = tempfile.mkstemp(prefix=".g15-rollback-", dir=os.path.dirname(dest))
+                    prepared.append((dest, tmp))
                     with os.fdopen(fd, "wb") as stream:
                         stream.write(content)
                     os.chmod(tmp, int(record["mode"]) & 0o777)
-                prepared.append((dest, tmp))
+                else:
+                    prepared.append((dest, None))
             for dest, tmp in prepared:
                 if tmp is None:
                     if os.path.exists(dest): os.unlink(dest)
@@ -793,11 +795,13 @@ def daemon_status_label():
     try:
         with open(os.path.join(CONFIG_DIR, "daemon-status.json"), encoding="utf-8") as stream:
             status = json.load(stream)
-        os.kill(int(status["pid"]), 0)
+        if not isinstance(status, dict) or type(status.get("pid")) is not int or status["pid"] <= 0:
+            raise ValueError("Invalid daemon status")
+        os.kill(status["pid"], 0)
         if status.get("hardware_ok"):
             return tr("Daemon ativo • Controlador OK", "Daemon active • Controller OK")
         return tr("Daemon ativo • Controlador indisponível ou aplicação falhou", "Daemon active • Controller unavailable or write failed")
-    except (OSError, ValueError, KeyError, TypeError):
+    except (OSError, ValueError, KeyError, TypeError, OverflowError):
         return tr("Daemon indisponível ou sem diagnóstico", "Daemon unavailable or no status")
 
 

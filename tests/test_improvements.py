@@ -158,6 +158,43 @@ class Improvements(unittest.TestCase):
         self.assertFalse((home/'.local/bin/g15_core.py').exists())
         self.assertFalse(list(home.rglob('.g15-install-*')))
 
+    def test_staging_failure_never_mutates_existing_services(self):
+        home=self.root/'home'
+        units=home/'config/systemd/user'
+        units.mkdir(parents=True)
+        for name in ('dell-g15-daemon.service','dell-g15-tray.service'):
+            (units/name).write_text('existing unit')
+        commands=[]
+        def runner(args,**kwargs):
+            commands.append(args)
+            return subprocess.CompletedProcess(args,0,'','')
+        env={'HOME':str(home),'XDG_CONFIG_HOME':str(home/'config'),'XDG_DATA_HOME':str(home/'data')}
+        with mock.patch.dict(os.environ,env), mock.patch.object(g15_install.os,'chmod',side_effect=OSError('disk failed')):
+            with self.assertRaises(RuntimeError):
+                g15_install.install_user(Path(BIN_DIR).parent,runner=runner)
+        self.assertTrue(commands)
+        self.assertTrue(all(args[2] in ('is-enabled','is-active') for args in commands),commands)
+        for name in ('dell-g15-daemon.service','dell-g15-tray.service'):
+            self.assertEqual((units/name).read_text(),'existing unit')
+        self.assertFalse(list(home.rglob('.g15-install-*')))
+
+    def test_rollback_preparation_failure_cleans_temporaries(self):
+        dest=self.root/'asset'
+        dest.write_bytes(b'current')
+        version=str(self.root/'version.json')
+        core.write_update_backup([(str(dest),b'previous',0o600)],version)
+        with mock.patch.object(core.os,'chmod',side_effect=OSError('chmod failed')):
+            with self.assertRaises(OSError):
+                core.restore_previous_update(version_file=version,files_map=[('assets/a',str(dest),0o644)])
+        self.assertEqual(dest.read_bytes(),b'current')
+        self.assertFalse(list(self.root.glob('.g15-rollback-*')))
+
+    def test_malformed_daemon_status_does_not_break_interface_poll(self):
+        for status in ([],None,{'pid':0},{'pid':float('inf')},{'pid':True},{'pid':10**100}):
+            (self.root/'daemon-status.json').write_text(json.dumps(status))
+            label=core.daemon_status_label()
+            self.assertTrue('indisponível' in label or 'unavailable' in label)
+
     def test_install_mid_copy_failure_restores_previous_files(self):
         self.install_failure('copy')
 

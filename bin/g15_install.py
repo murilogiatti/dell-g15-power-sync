@@ -40,12 +40,17 @@ def install_user(root, daemon_only=False, runner=subprocess.run, replace_fn=os.r
     backups, staged = {}, {}
     applied, stopped = [], []
     existing = [name for name in ('dell-g15-daemon.service','dell-g15-tray.service') if (units/name).exists()]
-    enabled = {}
+    enabled, active_before = {}, {}
+    services_touched = False
     def command(*args, check=True):
         result = runner(['systemctl','--user',*args],capture_output=True,text=True,timeout=20)
         if check and result.returncode:
             raise RuntimeError(result.stderr.strip() or 'systemctl failed: '+' '.join(args))
         return result.returncode == 0
+    # Capture service state before mutation. A staging failure must not change services.
+    for name in existing:
+        enabled[name] = command('is-enabled','--quiet',name,check=False)
+        active_before[name] = command('is-active','--quiet',name,check=False)
     try:
         for path,(content,mode) in payloads.items():
             backups[path] = (path.read_bytes(),path.stat().st_mode & 0o777) if path.exists() else (None,mode)
@@ -59,17 +64,17 @@ def install_user(root, daemon_only=False, runner=subprocess.run, replace_fn=os.r
                     os.fsync(stream.fileno())
                 os.chmod(tmp,mode)
         for name in existing:
-            enabled[name] = command('is-enabled','--quiet',name,check=False)
-            active = command('is-active','--quiet',name,check=False)
-            command('stop',name)
-            if active:
+            services_touched = True
+            if active_before[name]:
                 stopped.append(name)
+            command('stop',name)
         for path,(content,_mode) in payloads.items():
             if content is None:
                 if path.exists(): path.unlink()
             else:
                 replace_fn(staged[path],path)
             applied.append(path)
+        services_touched = True
         command('daemon-reload')
         desired = ['dell-g15-daemon.service']+([] if daemon_only else ['dell-g15-tray.service'])
         command('enable',*desired)
@@ -102,12 +107,14 @@ def install_user(root, daemon_only=False, runner=subprocess.run, replace_fn=os.r
                     os.chmod(tmp,mode)
                     os.replace(tmp,path)
             except Exception as err: errors.append(f'{path}: {err}')
-        try:
-            command('daemon-reload')
-            for name in ('dell-g15-daemon.service','dell-g15-tray.service'):
-                command('enable' if enabled.get(name,False) else 'disable',name,check=False)
-            for name in stopped: command('restart',name)
-        except Exception as err: errors.append(str(err))
+        if services_touched:
+            try:
+                command('daemon-reload')
+                names_to_restore = ('dell-g15-daemon.service','dell-g15-tray.service') if applied else existing
+                for name in names_to_restore:
+                    command('enable' if enabled.get(name,False) else 'disable',name,check=False)
+                for name in stopped: command('restart',name)
+            except Exception as err: errors.append(str(err))
         raise RuntimeError(f'Installation failed: {exc}. Recovery errors: {errors or "none"}') from exc
     finally:
         for path in staged.values():
