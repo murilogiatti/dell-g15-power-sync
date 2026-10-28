@@ -351,6 +351,28 @@ class GtkFeedback(unittest.TestCase):
         self.assertEqual(controller.send_osd_notification.call_count,2)
         self.assertEqual(core.local_build_update_notice('a'*40),'')
 
+    def test_power_action_dispatches_to_worker_without_touching_ui(self):
+        from types import SimpleNamespace
+        import threading
+        completed=threading.Event()
+        dispatched=[]
+        main_thread=threading.get_ident()
+        worker_threads=[]
+        controller=SimpleNamespace(_power_busy=False,_power_generation=0,cfg=core.normalize_config({}),
+                                   _on_power_done=mock.Mock())
+        def action(*args):
+            worker_threads.append(threading.get_ident())
+            return True,'performance','title','body'
+        def idle(*args):
+            dispatched.append(args)
+            completed.set()
+        with mock.patch.object(core,'run_power_action',side_effect=action), mock.patch.object(self.gtk.GLib,'idle_add',side_effect=idle):
+            self.gtk.G15ControlApp._queue_power_action(controller,'profile','performance',True)
+            self.assertTrue(completed.wait(2))
+        self.assertNotEqual(worker_threads,[main_thread])
+        controller._on_power_done.assert_not_called()
+        self.assertEqual(len(dispatched),1)
+
     def test_feedback_pending_and_running_never_claim_success(self):
         for status in (None, {'seq':41,'state':'done','ok':True},
                        {'seq':42,'state':'running','ok':None}):
@@ -401,13 +423,34 @@ sys.path.insert(0, sys.argv[1])
 import g15_qt, g15_core
 # Patch runtime integrations before controller construction.
 from unittest.mock import patch
-with patch.object(g15_qt.G15QtController, '_setup_tray_icon'), patch.object(g15_qt.G15QtController, '_setup_config_watcher'), patch.object(g15_qt.G15QtController, '_setup_hotkey_monitors'), patch.object(g15_core, 'read_telemetry', return_value={}), patch.object(g15_core, 'get_power_profile', return_value=None), patch.object(g15_core, 'load_config', return_value=g15_core.normalize_config({})), patch.object(g15_core, 'read_local_version', return_value=('unknown','')):
+with patch.object(g15_qt.G15QtController, '_setup_tray_icon'), patch.object(g15_qt.G15QtController, '_rebuild_tray_menu'), patch.object(g15_core, 'save_config'), patch.object(g15_qt.G15QtController, '_setup_config_watcher'), patch.object(g15_qt.G15QtController, '_setup_hotkey_monitors'), patch.object(g15_core, 'read_telemetry', return_value={}), patch.object(g15_core, 'get_power_profile', return_value=None), patch.object(g15_core, 'load_config', return_value=g15_core.normalize_config({})), patch.object(g15_core, 'read_local_version', return_value=('unknown','')):
  app = QApplication([])
  controller = g15_qt.G15QtController(app)
  engine = QQmlApplicationEngine()
  engine.rootContext().setContextProperty('backend',controller)
  engine.loadData(QByteArray(sys.stdin.buffer.read()),QUrl('qrc:/smoke.qml'))
  assert engine.rootObjects(), 'QML root failed to load'
+ changes=[]
+ controller.configChanged.connect(lambda:changes.append(True))
+ controller.setManualBrightness(35)
+ assert controller.manualBrightness == 35 and not controller.syncScreen
+ controller.setSpeed(75)
+ assert controller.speed == 75
+ controller.applyQuickColor('123456')
+ assert controller.zoneColors1 == ['123456']*4 and len(changes) >= 3
+ # Mouse wheel adapter emits the correct brightness direction without hardware access.
+ wheel=g15_qt.G15TrayIcon()
+ steps=[]
+ wheel.wheelStepped.connect(steps.append)
+ class FakeWheel:
+  class Type: Wheel=1
+  def type(self):return 1
+  def angleDelta(self):
+   from PyQt6.QtCore import QPoint
+   return QPoint(0,120)
+  def accept(self):pass
+ assert wheel.event(FakeWheel()) and steps == [1]
+
 '''
         env = dict(os.environ, QT_QPA_PLATFORM='offscreen', QT_QUICK_BACKEND='software',
                    XDG_CONFIG_HOME=tempfile.gettempdir(), PYTHONDONTWRITEBYTECODE='1')

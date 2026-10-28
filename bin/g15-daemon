@@ -9,9 +9,7 @@ import ctypes
 import ctypes.util
 import fcntl
 import glob
-import contextlib
 import json
-import math
 import os
 import select
 import signal
@@ -80,22 +78,7 @@ RAINBOW_STEPS = (
 
 VALID_MODES = ("static", "breathing", "pulse", "morph", "spectrum", "rainbow")
 
-DEFAULT_CONFIG = {
-    "sync_screen": True,
-    "manual_brightness": 100,
-    "mode": "static",
-    "speed": 40,
-    "per_zone": False,
-    "zones_rgb": ["E6E6E6", "E6E6E6", "E6E6E6", "E6E6E6"],
-    "zones_rgb2": ["00E5FF", "00E5FF", "00E5FF", "00E5FF"],
-    "power_cap": True,
-    "save_boot": False,
-    "save_boot_seq": 0,
-    "save_boot_status": None,
-    "g_mode": False,
-    "pre_gmode": None,
-    "force_seq": 0,
-}
+
 
 # Configurable roots (overridable in unit tests)
 SYSFS_BACKLIGHT_ROOT = "/sys/class/backlight"
@@ -106,161 +89,21 @@ CONFIG_DIR = os.path.join(
 CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
 
 
-def _sanitize_hex_color(val, fallback):
-    clean = str(val or "").lstrip("#").strip().upper()
-    if len(clean) == 6 and all(c in "0123456789ABCDEF" for c in clean):
-        try:
-            int(clean, 16)
-            return clean
-        except ValueError:
-            pass
-    return fallback
-
-
-def _safe_int(val, default, min_val=None, max_val=None):
-    if isinstance(val, bool) or val is None:
-        res = default
-    elif isinstance(val, int):
-        res = val
-    elif isinstance(val, float):
-        if not math.isfinite(val):
-            res = default
-        else:
-            res = int(val)
-    elif isinstance(val, str):
-        s = val.strip()
-        if not s:
-            res = default
-        else:
-            try:
-                res = int(s)
-            except ValueError:
-                try:
-                    f = float(s)
-                    res = int(f) if math.isfinite(f) else default
-                except (ValueError, OverflowError):
-                    res = default
-    else:
-        res = default
-    if min_val is not None:
-        res = max(min_val, res)
-    if max_val is not None:
-        res = min(max_val, res)
-    return res
-
-
-def normalize_config(raw):
-    cfg = dict(DEFAULT_CONFIG)
-    cfg["zones_rgb"] = list(DEFAULT_CONFIG["zones_rgb"])
-    cfg["zones_rgb2"] = list(DEFAULT_CONFIG["zones_rgb2"])
-    if not isinstance(raw, dict):
-        return cfg
-
-    for bool_key in ("sync_screen", "per_zone", "power_cap", "save_boot", "g_mode"):
-        if isinstance(raw.get(bool_key), bool):
-            cfg[bool_key] = raw[bool_key]
-
-    cfg["manual_brightness"] = _safe_int(raw.get("manual_brightness"), 100, 0, 100)
-    cfg["speed"] = _safe_int(raw.get("speed"), 40, 10, 100)
-    cfg["force_seq"] = _safe_int(raw.get("force_seq"), 0, 0, 2_000_000_000)
-
-    cfg["save_boot_seq"] = _safe_int(raw.get("save_boot_seq"), 0, 0, 9_223_372_036_854_775_807)
-
-    raw_mode = raw.get("mode")
-    if isinstance(raw_mode, str) and raw_mode.strip().lower() in VALID_MODES:
-        cfg["mode"] = raw_mode.strip().lower()
-
-    for key, fallback in (("zones_rgb", "E6E6E6"), ("zones_rgb2", "00E5FF")):
-        arr = raw.get(key)
-        if isinstance(arr, list) and len(arr) >= 4:
-            cfg[key] = [_sanitize_hex_color(x, fallback) for x in arr[:4]]
-        else:
-            cfg[key] = [fallback] * 4
-
-    pre = raw.get("pre_gmode")
-    if isinstance(pre, dict):
-        pre_mode = str(pre.get("mode", "static")).strip().lower()
-        if pre_mode not in VALID_MODES:
-            pre_mode = "static"
-        pre_zones = pre.get("zones_rgb")
-        if isinstance(pre_zones, list) and len(pre_zones) >= 4:
-            norm_pre_zones = [_sanitize_hex_color(x, "E6E6E6") for x in pre_zones[:4]]
-        else:
-            norm_pre_zones = list(DEFAULT_CONFIG["zones_rgb"])
-        pre_prof = pre.get("power_profile")
-        if not isinstance(pre_prof, str) or pre_prof not in (
-            "power-saver",
-            "balanced",
-            "performance",
-        ):
-            pre_prof = "balanced"
-        cfg["pre_gmode"] = {
-            "mode": pre_mode,
-            "per_zone": bool(pre.get("per_zone", False))
-            if isinstance(pre.get("per_zone"), bool)
-            else False,
-            "zones_rgb": norm_pre_zones,
-            "power_profile": pre_prof,
-        }
-    else:
-        cfg["pre_gmode"] = None
-
-    sbs = raw.get("save_boot_status")
-    if isinstance(sbs, dict):
-        state = str(sbs.get("state", "")).strip().lower()
-        ok_val = sbs.get("ok")
-        if state in ("running", "done") or isinstance(ok_val, bool):
-            if state not in ("running", "done"):
-                state = "done"
-            cfg["save_boot_status"] = {
-                "seq": _safe_int(sbs.get("seq"), 0, 0, 9_223_372_036_854_775_807),
-                "state": state,
-                "ok": bool(ok_val) if isinstance(ok_val, bool) else None,
-            }
-        else:
-            cfg["save_boot_status"] = None
-    else:
-        cfg["save_boot_status"] = None
-
-    return cfg
+# Shared configuration contains no graphical imports.
+from g15_config import DEFAULT_CONFIG, VALID_MODES, normalize_config, config_lock
+import g15_config as config_store
 
 
 def load_config(path=None):
-    cfg_path = path or CONFIG_PATH
-    raw = None
-    try:
-        with open(cfg_path, "r", encoding="utf-8") as f:
-            raw = json.load(f)
-    except (OSError, ValueError):
-        pass
-    return normalize_config(raw)
-
-
-def _write_config(cfg, path=None):
-    cfg_path = path or CONFIG_PATH
-    cfg_dir = os.path.dirname(cfg_path)
-    os.makedirs(cfg_dir, exist_ok=True)
-    tmp_path = f"{cfg_path}.tmp.{os.getpid()}"
-    with open(tmp_path, "w", encoding="utf-8") as f:
-        json.dump(cfg, f, indent=2)
-    os.replace(tmp_path, cfg_path)
-
-
-@contextlib.contextmanager
-def config_lock(path):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path + ".lock", "a", encoding="utf-8") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            fcntl.flock(lock, fcntl.LOCK_UN)
+    return config_store.load_config(path or CONFIG_PATH)
 
 
 def save_config(cfg, path=None):
-    cfg_path = path or CONFIG_PATH
-    with config_lock(cfg_path):
-        _write_config(cfg, cfg_path)
+    return config_store.save_config(cfg, path or CONFIG_PATH)
+
+
+def update_config_preserving_concurrent_edits(mutator_fn, path=None):
+    return config_store.update_config(mutator_fn, path or CONFIG_PATH)
 
 
 def parse_hex_rgb(hex_str, power_cap=True):
@@ -709,19 +552,17 @@ def make_state_signature(cfg, eff_level):
     )
 
 
-def update_config_preserving_concurrent_edits(mutator_fn, path=None):
-    """
-    Re-reads the latest on-disk config immediately before saving, applies
-    `mutator_fn(latest_cfg)` in-place, and atomically writes `latest_cfg` back.
-    Prevents a long-running operation (such as a 5+ second boot EEPROM write)
-    from overwriting user changes made while the hardware write was in progress.
-    """
-    cfg_path = path or CONFIG_PATH
-    with config_lock(cfg_path):
-        latest = load_config(cfg_path)
-        mutator_fn(latest)
-        _write_config(latest, cfg_path)
-    return latest
+def publish_daemon_status(state, folder):
+    payload = {"pid": os.getpid(), "hidraw": state.get("hidraw_path"),
+               "hardware_ok": state.get("hardware_ok", False),
+               "last_level": (state.get("last_sig") or [None])[0]}
+    if payload == state.get("published_status"):
+        return
+    try:
+        config_store.write_json(os.path.join(folder, "daemon-status.json"), payload)
+        state["published_status"] = payload
+    except OSError as exc:
+        print(f"Cannot publish daemon status: {exc}", file=sys.stderr, flush=True)
 
 
 def process_daemon_sync_step(
@@ -786,51 +627,37 @@ def process_daemon_sync_step(
 
     if cfg.get("save_boot"):
         req_seq = int(cfg.get("save_boot_seq", 0)) or int(cfg.get("force_seq", 0))
-        try:
-            update_config_preserving_concurrent_edits(
-                lambda latest: latest.update(
-                    {
-                        "save_boot_status": {
-                            "seq": req_seq,
-                            "state": "running",
-                            "ok": None,
-                        }
-                    }
-                ),
-                path=cfg_file,
-            )
-        except OSError:
-            pass
-
-        boot_ok, state["zone_ids"] = hw_apply(
-            state["hidraw_path"],
-            eff_level,
-            state.get("zone_ids"),
-            config=cfg,
-            save_boot=True,
-        )
-
-        def _finalize_boot_status(latest):
-            # Only clear save_boot if no newer save_boot request arrived meanwhile
+        cached = state.setdefault("boot_results", {})
+        status = cfg.get("save_boot_status") or {}
+        if req_seq not in cached:
+            if status.get("seq") == req_seq and status.get("state") == "running":
+                # A previous process may have written EEPROM before crashing. Never replay it.
+                cached[req_seq] = False
+                print("Boot write interrupted; submit a new request to retry.", file=sys.stderr, flush=True)
+            else:
+                try:
+                    update_config_preserving_concurrent_edits(
+                        lambda latest: latest.update(save_boot_status={
+                            "seq": req_seq, "state": "running", "ok": None}), path=cfg_file)
+                except OSError as exc:
+                    print(f"Cannot persist boot request; hardware write skipped: {exc}", file=sys.stderr, flush=True)
+                    return cfg
+                # Remember admission before touching hardware, even if completion cannot be saved.
+                cached[req_seq] = False
+                cached[req_seq], state["zone_ids"] = hw_apply(
+                    state["hidraw_path"], eff_level, state.get("zone_ids"), config=cfg, save_boot=True)
+        def finalize(latest):
             if (int(latest.get("save_boot_seq", 0)) or int(latest.get("force_seq", 0))) == req_seq:
                 latest["save_boot"] = False
-            latest["save_boot_status"] = {
-                "seq": req_seq,
-                "state": "done",
-                "ok": bool(boot_ok),
-            }
-
+            latest["save_boot_status"] = {"seq": req_seq, "state": "done", "ok": bool(cached[req_seq])}
         try:
-            cfg = update_config_preserving_concurrent_edits(
-                _finalize_boot_status, path=cfg_file
-            )
-        except OSError:
-            pass
+            cfg = update_config_preserving_concurrent_edits(finalize, path=cfg_file)
+        except OSError as exc:
+            print(f"Boot hardware result={cached[req_seq]}; cannot persist confirmation: {exc}", file=sys.stderr, flush=True)
         state["last_sig"] = None
         perc, screen_on = read_screen_state(state["backlight_dir"])
         eff_level, state["current_auto_zone"] = compute_effective_state(
-            cfg, perc, screen_on, state.get("current_auto_zone", -1)
-        )
+            cfg, perc, screen_on, state.get("current_auto_zone", -1))
 
     new_sig = make_state_signature(cfg, eff_level)
     if new_sig != state.get("last_sig"):
@@ -840,6 +667,7 @@ def process_daemon_sync_step(
             state.get("zone_ids"),
             config=cfg,
         )
+        state["hardware_ok"] = ok
         if ok:
             print(
                 f"Sync: Screen {perc}% -> Keyboard {eff_level}% "
@@ -847,6 +675,7 @@ def process_daemon_sync_step(
                 flush=True,
             )
             state["last_sig"] = new_sig
+    publish_daemon_status(state, cfg_dir)
     return cfg
 
 
@@ -882,6 +711,7 @@ def run_daemon():
         "zone_ids": zone_ids,
         "current_auto_zone": current_auto_zone,
         "last_sig": last_sig,
+        "hardware_ok": ok,
         "ifd": ifd,
         "inotify_meta": inotify_meta,
         "sock": sock,
@@ -894,6 +724,7 @@ def run_daemon():
         flush=True,
     )
 
+    publish_daemon_status(state, CONFIG_DIR)
     pending_sync = bool(cfg.get("save_boot"))
     pending_rebind = False
     pending_bl_rebind = False

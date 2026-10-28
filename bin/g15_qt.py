@@ -8,6 +8,7 @@ fonts, icons, and accessibility automatically via the Plasma `kde` QPA platform 
 """
 
 import json
+import copy
 import os
 import signal
 import sys
@@ -687,6 +688,8 @@ class G15TrayIcon(QSystemTrayIcon):
 
 
 class G15QtController(QObject):
+    _powerFinished = pyqtSignal(object, str, bool)
+    _pollFinished = pyqtSignal(object, object, str, int)
     configChanged = pyqtSignal()
     telemetryChanged = pyqtSignal()
     updateStateChanged = pyqtSignal()
@@ -701,7 +704,7 @@ class G15QtController(QObject):
         self.start_hidden = start_hidden
         self.cfg = core.load_config()
         self.telemetry = core.read_telemetry()
-        self.active_power_profile = core.get_power_profile()
+        self.active_power_profile = None
         self.local_commit, self.repo_dir = core.read_local_version()
         self.latest_commit = self.local_commit
         self.latest_commit_msg = ""
@@ -709,6 +712,10 @@ class G15QtController(QObject):
         self._checking_update = False
         self._updating_app = False
         self._notified_commit = ""
+        self._power_busy = False
+        self._power_generation = 0
+        self._poll_busy = False
+        self._daemon_label = core.daemon_status_label()
         self._pending_boot_seq = 0
         self._last_gmode_ts = 0.0
         self._last_backlight_ts = 0.0
@@ -723,6 +730,8 @@ class G15QtController(QObject):
         self._updateCheckFinished.connect(self._on_update_check_done)
         self._selfUpdateFinished.connect(self._on_self_update_done)
 
+        self._powerFinished.connect(self._on_power_done)
+        self._pollFinished.connect(self._on_poll_done)
         self._setup_tray_icon()
         self._setup_config_watcher()
         self._setup_hotkey_monitors()
@@ -818,7 +827,7 @@ class G15QtController(QObject):
 
     @pyqtProperty(str, notify=telemetryChanged)
     def telemetryDetailed(self):
-        return core.format_detailed_telemetry_label(self.telemetry)
+        return core.format_detailed_telemetry_label(self.telemetry) + "\n" + self._daemon_label
 
     @pyqtProperty(str, notify=updateStateChanged)
     def updateSubtitle(self):
@@ -1019,16 +1028,35 @@ class G15QtController(QObject):
                 2500,
             )
 
-    def toggle_g_mode(self, target_state=None, notify=True):
-        changed, active_prof, title, body = core.apply_g_mode_transition(
-            self.cfg, target_state=target_state
-        )
-        if not changed:
+    def _queue_power_action(self, kind, target, notify):
+        if self._power_busy:
             return
-        self.active_power_profile = active_prof
-        if notify and title:
-            self.send_osd_notification(title, body)
+        self._power_busy = True
+        self._power_generation += 1
+        cfg = copy.deepcopy(self.cfg)
+        def worker():
+            result, error = None, ""
+            try:
+                result = core.run_power_action(cfg, kind, target)
+            except Exception as exc:
+                error = str(exc)
+            self._powerFinished.emit(result, error, notify)
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_power_done(self, result, error, notify):
+        self._power_busy = False
+        self.cfg = core.load_config()
+        if error:
+            self.send_osd_notification(core.tr("Falha no perfil de energia", "Power profile failed"), error)
+        elif result:
+            changed, self.active_power_profile, title, body = result
+            if changed and notify:
+                self.send_osd_notification(title, body)
         self._refresh_all()
+        return False
+
+    def toggle_g_mode(self, target_state=None, notify=True):
+        self._queue_power_action("gmode", target_state, notify)
 
     def cycle_backlight_mode(self, notify=True):
         title, body = core.apply_backlight_cycle(self.cfg)
@@ -1042,12 +1070,7 @@ class G15QtController(QObject):
         self._refresh_all()
 
     def _apply_power_profile(self, prof_id):
-        if core.set_power_profile(prof_id):
-            self.active_power_profile = prof_id
-            if prof_id != "performance" and self.cfg.get("g_mode"):
-                self.cfg["g_mode"] = False
-                core.save_config(self.cfg)
-            self._refresh_all()
+        self._queue_power_action("profile", prof_id, True)
 
     def present_control_window(self):
         self.showWindowRequested.emit()
@@ -1324,12 +1347,30 @@ class G15QtController(QObject):
                 self.cycle_backlight_mode(notify=True)
 
     def _on_telemetry_tick(self):
-        self.telemetry = core.read_telemetry()
-        self.active_power_profile = core.get_power_profile()
-        self.tray.setToolTip(f"Dell G15 Control — {core.format_telemetry_label(self.telemetry)}")
+        if self._poll_busy or self._power_busy:
+            return True
+        self._poll_busy = True
+        generation = self._power_generation
+        def worker():
+            data = core.read_telemetry()
+            profile = core.get_power_profile()
+            label = core.daemon_status_label()
+            self._pollFinished.emit(data, profile, label, generation)
+        threading.Thread(target=worker, daemon=True).start()
+        return True
+
+    def _on_poll_done(self, data, profile, label, generation):
+        self._poll_busy = False
+        if generation != self._power_generation or self._power_busy:
+            return False
+        self.telemetry = data
+        self.active_power_profile = profile
+        self._daemon_label = label
+        self.tray.setToolTip(f"{label} • {core.format_telemetry_label(data)}")
         if not self.tray_menu.isVisible():
             self._rebuild_tray_menu()
         self.telemetryChanged.emit()
+        return False
 
     def _refresh_all(self):
         self._rebuild_tray_menu()

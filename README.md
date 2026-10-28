@@ -6,7 +6,7 @@
 
 ## Português
 
-Controla a iluminação de controladores Alienware AW-ELC USB `187c:0550` / `187c:0551` no Linux. O daemon usa somente a biblioteca padrão do Python 3. O launcher escolhe GTK4/Libadwaita no GNOME e PyQt6/QtQuick/Kirigami no KDE Plasma, importando somente o toolkit escolhido.
+Controla a iluminação de controladores Alienware AW-ELC USB `187c:0550` / `187c:0551` no Linux. O daemon e o módulo compartilhado `g15_config.py` usam somente a biblioteca padrão do Python 3. O launcher escolhe GTK4/Libadwaita no GNOME e PyQt6/QtQuick/Kirigami no KDE Plasma, importando somente o toolkit escolhido.
 
 ### Instalação somente no usuário
 
@@ -16,7 +16,7 @@ Controla a iluminação de controladores Alienware AW-ELC USB `187c:0550` / `187
 ./install.sh
 ```
 
-O instalador verifica os componentes existentes antes de interromper serviços. Não instala pacotes, não usa privilégios administrativos, não modifica `/usr`, `/etc`, regras udev ou a imagem do sistema. Os arquivos da aplicação ficam em `~/.local/bin`, `$XDG_CONFIG_HOME/systemd/user` e `$XDG_DATA_HOME` (com os padrões `~/.config` e `~/.local/share`). Requer Python 3 e systemd de usuário existentes.
+O instalador verifica os componentes existentes e prepara todos os arquivos antes de interromper serviços. Falhas na substituição ou na inicialização acionam a recuperação dos arquivos e a tentativa de restauração dos serviços anteriores. Não instala pacotes, não usa privilégios administrativos, não modifica `/usr`, `/etc`, regras udev ou a imagem do sistema. Os arquivos da aplicação ficam em `~/.local/bin`, `$XDG_CONFIG_HOME/systemd/user` e `$XDG_DATA_HOME` (com os padrões `~/.config` e `~/.local/share`). Requer Python 3 e systemd de usuário existentes.
 
 **Kinoite, Silverblue e outras distribuições imutáveis:** utiliza exclusivamente o que já está disponível. Não utiliza layering, ambientes Python adicionais, runtimes baixados ou containers para suprir dependências. A presença de Qt ou GTK não garante a presença dos bindings Python. Se faltar a GUI, instale explicitamente somente o daemon:
 
@@ -31,7 +31,7 @@ Esse modo desativa o serviço gráfico anterior, preserva `config.json` e não i
 | Função | Componentes/acesso necessários | Na ausência |
 |---|---|---|
 | Daemon RGB e brilho automático | Python 3, HID AW-ELC acessível, eventos Linux | Hardware indisponível; diagnóstico explícito |
-| Painel GNOME | PyGObject, GTK4, Libadwaita, sessão gráfica | Usar daemon/CLI sem GUI |
+| Painel GNOME | PyGObject, GTK 4.12+, Libadwaita 1.4+, sessão gráfica | Usar daemon/CLI sem GUI |
 | Painel KDE Plasma 6 | PyQt6 (Widgets, Network, Qml, Quick), QtQuick Controls/Layouts, Kirigami 6, sessão gráfica | Usar daemon/CLI sem GUI |
 | Integração de tema | Integração de plataforma/portal já presente | Aparência conforme os componentes disponíveis |
 | Atalhos Fn+F5/Fn+F9 | Leitura dos dispositivos evdev existentes | Atalhos físicos indisponíveis; comandos continuam disponíveis |
@@ -59,11 +59,33 @@ Não há instalação automática de serviços, extensões ou dependências. No 
 
 - Brilho da tela em cinco faixas: 0–20 → 10%, 21–40 → 30%, 41–60 → 50%, 61–80 → 75%, 81–100 → 100%, com histerese de ±2%. `bl_power != 0` apaga os LEDs; a detecção depende do driver/compositor.
 - Cor única ou quatro zonas, efeitos static, breathing, pulse, morph, spectrum e rainbow. O limite RGB padrão é 230 por canal.
-- O daemon bloqueia em eventos netlink/inotify quando ocioso. A GUI consulta telemetria a cada três segundos; não se promete CPU zero para toda a aplicação.
+- O daemon bloqueia em eventos netlink/inotify quando ocioso. A GUI consulta telemetria a cada três segundos em uma thread de trabalho; consultas e mudanças de perfis de energia também ficam fora da thread gráfica; não se promete CPU zero para toda a aplicação.
 - Zonas conhecidas dos IDs de plataforma `0C01`, `0E03`, `0E07`, `0E0A`; demais controladores usam a contagem reportada ou fallback. Isso não comprova todos os modelos G15.
-- Gravação de boot com resposta HID, estado pendente/em execução/concluído e identificação própria da solicitação. Prazo de 30 segundos; timeout significa ausência de confirmação no prazo, não prova de falha física. A resposta HID não equivale a leitura independente da EEPROM após reinicialização.
-- Modo G solicita performance e restaura o perfil anterior; falhas são reportadas. Isso não garante controle direto de ventoinhas ou equivalência ao Game Shift do firmware.
-- Atualizador baixa um único SHA completo, valida Python, prepara arquivos e substitui cada destino com recuperação de falhas. Não modifica o checkout Git. Instalações com alterações locais não publicadas não tentam atualizar pelo GitHub; reinstale após publicar o commit para habilitar atualizações remotas. Falhas de download, aplicação, recuperação, registro da versão e enfileiramento do reinício são diferenciadas. A recuperação em memória não resiste a SIGKILL/queda de energia como uma transação global. O reinício é enfileirado sem bloquear a própria GUI; conclusão pode ser consultada em `systemctl --user status`.
+- Gravação de boot com resposta HID, estado pendente/em execução/concluído e identificação própria da solicitação. A operação só começa após persistir sua admissão; uma confirmação que falhou ao salvar não provoca nova gravação. Após interrupção durante a operação, é necessária uma nova solicitação explícita. Prazo de 30 segundos; timeout significa ausência de confirmação no prazo, não prova de falha física. A resposta HID não equivale a leitura independente da EEPROM após reinicialização.
+- Configuração compartilhada com snapshots: somente os campos alterados são mesclados sob lock, preservando edições independentes entre GUI, CLI e daemon. No mesmo campo, vence a última escrita.
+- Modo G solicita performance e restaura exatamente o perfil anterior (inclusive quando já era performance); falhas são reportadas. Isso não garante controle direto de ventoinhas ou equivalência ao Game Shift do firmware.
+- Atualizador consulta somente a última **release estável publicada**, resolve sua tag para um SHA completo, valida Python, prepara arquivos e substitui cada destino com recuperação de falhas. Não modifica o checkout Git. Instalações com alterações locais não publicadas não tentam atualizar pelo GitHub; reinstale após publicar o commit para habilitar atualizações remotas. Falhas de download, aplicação, recuperação, registro da versão e enfileiramento do reinício são diferenciadas. A recuperação em memória não resiste a SIGKILL/queda de energia como uma transação global. O reinício é enfileirado sem bloquear a própria GUI; conclusão pode ser consultada em `systemctl --user status`.
+
+### Estado do daemon e retorno de versão
+
+O painel mostra se o processo do daemon está acessível e se a última aplicação ao controlador teve sucesso. O arquivo `daemon-status.json` registra mudanças de estado, sem polling no daemon. O diagnóstico é do processo e da última tentativa; não é uma medição contínua do hardware.
+
+Antes de aplicar uma atualização, a versão anterior é preservada em `$XDG_DATA_HOME/dell-g15/update-rollback.json` (padrão `~/.local/share/dell-g15`). Para restaurá-la explicitamente:
+
+```bash
+~/.local/bin/g15-tray --rollback
+```
+
+O retorno restaura os arquivos e os metadados anteriores e enfileira o reinício dos serviços. A configuração de cores e brilho é preservada. Há uma cópia de retorno; falhas de disco também podem impedir a recuperação. Isso não substitui uma instalação transacional resistente a quedas de energia. A desinstalação remove essa cópia junto com os dados da aplicação.
+
+As APIs que determinam o requisito mínimo GTK incluem [CssProvider.load_from_string (4.12)](https://docs.gtk.org/gtk4/method.CssProvider.load_from_string.html) e [Adw.SwitchRow (1.4)](https://gnome.pages.gitlab.gnome.org/libadwaita/doc/1-latest/class.SwitchRow.html). O diagnóstico verifica as APIs presentes, em vez de presumir compatibilidade pelo nome da distribuição.
+
+| Ambiente | Validação disponível | Pendente |
+|---|---|---|
+| GNOME nesta máquina | Dependências e testes locais; instalação anterior executada | Revalidação desta versão após instalação |
+| Ubuntu do CI | ShellCheck, sintaxe, testes GTK e núcleo | Interação visual e hardware real |
+| Fedora do CI | Carregamento QML, controles e isolamento Qt; núcleo | Sessão Plasma real e hardware |
+| Kinoite/Silverblue e outras imutáveis | Instalação somente no usuário testada em diretórios temporários | Imagem real, componentes e permissões existentes |
 
 ### Validação e limites
 
@@ -88,6 +110,6 @@ Use `--show` for the panel, `--diagnose` for optional capabilities, `--print-bac
 
 Unavailable sensors show `N/A`; unavailable power-profile support disables its selector. Hotkeys require existing evdev read access. A tray host is optional for opening the panel. Theme integration depends on the platform plugins/portals already available. Qt6 does not imply the Python bindings are present; Plasma5 is outside the Qt6/Kirigami6 backend requirement.
 
-Updates pin all downloads to one commit, stage and validate payloads, and recover from partial replacement errors without changing the Git checkout. This is not a global crash-safe transaction. Boot writes use correlated pending/running/completed feedback and a 30-second deadline. A missing confirmation is reported as a timeout, not as proven hardware failure.
+Updates select published stable releases and pin all downloads to their resolved commit, stage and validate payloads, and recover from partial replacement errors without changing the Git checkout. One previous version is retained for explicit `--rollback`. Configuration snapshots merge only changed fields; power actions run off the GUI thread. This is not a global crash-safe transaction. Boot writes use correlated pending/running/completed feedback and a 30-second deadline. A missing confirmation is reported as a timeout, not as proven hardware failure.
 
 Automated tests run using temporary user data and mocked hardware/services. The QML smoke test explicitly skips when PyQt6 is absent. Actual visual integration on KDE and GNOME, immutable images and physical HID/EEPROM behavior require testing on those systems; full distribution compatibility and feature parity are not claimed. See the Portuguese capability table and validation notes above.

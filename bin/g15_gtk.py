@@ -6,6 +6,7 @@ Strictly isolated from Qt: never imports PyQt6 or PySide6.
 All business logic, telemetry, config, and atomic updater come from `g15_core`.
 """
 
+import copy
 import os
 import signal
 import sys
@@ -194,7 +195,7 @@ class G15ControlApp(Adw.Application):
         self.start_hidden = start_hidden
         self.cfg = load_config()
         self.telemetry = read_telemetry()
-        self.active_power_profile = get_power_profile()
+        self.active_power_profile = None
         self.menu_revision = 1
         self.menu_actions = {}
         self.menu_items_flat = {}
@@ -219,6 +220,10 @@ class G15ControlApp(Adw.Application):
         self._notified_commit = ""
         self._gnome_settings = None
         self._portal_sub_id = 0
+        self._power_busy = False
+        self._power_generation = 0
+        self._poll_busy = False
+        self._daemon_label = core.daemon_status_label()
         self._pending_boot_seq = 0
         self._boot_timeout_id = 0
 
@@ -472,22 +477,37 @@ class G15ControlApp(Adw.Application):
                 self.cycle_backlight_mode(notify=True)
 
     # --- Shared Business Actions Delegated to g15_core ---
-    def toggle_g_mode(self, target_state=None, notify=True):
-        changed, active_prof, title, body = core.apply_g_mode_transition(
-            self.cfg,
-            target_state=target_state,
-            get_profile_fn=lambda: get_power_profile(),
-            set_profile_fn=lambda p: set_power_profile(p),
-            save_fn=lambda c: save_config(c),
-        )
-        if not changed:
+    def _queue_power_action(self, kind, target, notify):
+        if self._power_busy:
             return
-        self.active_power_profile = active_prof
-        if notify and title:
-            self.send_osd_notification(title, body)
+        self._power_busy = True
+        self._power_generation += 1
+        cfg = copy.deepcopy(self.cfg)
+        def worker():
+            result, error = None, ""
+            try:
+                result = core.run_power_action(cfg, kind, target)
+            except Exception as exc:
+                error = str(exc)
+            GLib.idle_add(self._on_power_done, result, error, notify)
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_power_done(self, result, error, notify):
+        self._power_busy = False
+        self.cfg = core.load_config()
+        if error:
+            self.send_osd_notification(core.tr("Falha no perfil de energia", "Power profile failed"), error)
+        elif result:
+            changed, self.active_power_profile, title, body = result
+            if changed and notify:
+                self.send_osd_notification(title, body)
         self._notify_menu_updated()
         self._sync_window_from_config()
         self._update_window_telemetry()
+        return False
+
+    def toggle_g_mode(self, target_state=None, notify=True):
+        self._queue_power_action("gmode", target_state, notify)
 
     def cycle_backlight_mode(self, notify=True):
         title, body = core.apply_backlight_cycle(
@@ -569,15 +589,28 @@ class G15ControlApp(Adw.Application):
         return False
 
     def _on_telemetry_tick(self):
-        old_lbl = core.format_telemetry_label(self.telemetry)
-        self.telemetry = read_telemetry()
-        new_lbl = core.format_telemetry_label(self.telemetry)
-        self.active_power_profile = get_power_profile()
-        self._update_window_telemetry()
-        if new_lbl != old_lbl and 1 in self.menu_items_flat:
-            self.menu_items_flat[1]["label"] = GLib.Variant("s", new_lbl)
-            self._emit_item_prop_updated(1, {"label": GLib.Variant("s", new_lbl)})
+        if self._poll_busy or self._power_busy:
+            return True
+        self._poll_busy = True
+        generation = self._power_generation
+        def worker():
+            data = core.read_telemetry()
+            profile = core.get_power_profile()
+            label = core.daemon_status_label()
+            GLib.idle_add(self._on_poll_done, data, profile, label, generation)
+        threading.Thread(target=worker, daemon=True).start()
         return True
+
+    def _on_poll_done(self, data, profile, label, generation):
+        self._poll_busy = False
+        if generation != self._power_generation or self._power_busy:
+            return False
+        self.telemetry = data
+        self.active_power_profile = profile
+        self._daemon_label = label
+        self._update_window_telemetry()
+        self._notify_menu_updated()
+        return False
 
     def _emit_item_prop_updated(self, item_id, changed_props):
         if not self._bus:
@@ -989,14 +1022,7 @@ class G15ControlApp(Adw.Application):
         self._sync_window_from_config()
 
     def _apply_power_profile(self, prof_id):
-        if set_power_profile(prof_id):
-            self.active_power_profile = prof_id
-            if prof_id != "performance" and self.cfg.get("g_mode"):
-                self.cfg["g_mode"] = False
-                save_config(self.cfg)
-            self._notify_menu_updated()
-            self._update_window_telemetry()
-            self._sync_window_from_config()
+        self._queue_power_action("profile", prof_id, True)
 
     def _trigger_save_boot(self):
         if self._boot_timeout_id:
@@ -1765,7 +1791,7 @@ class G15ControlApp(Adw.Application):
         if self.window is None:
             return
         self._lbl_telemetry.set_label(
-            core.format_detailed_telemetry_label(self.telemetry)
+            core.format_detailed_telemetry_label(self.telemetry) + "\n" + self._daemon_label
         )
         self._updating_ui = True
         try:
@@ -1875,18 +1901,8 @@ class G15ControlApp(Adw.Application):
             save_config(self.cfg)
 
     def _on_ui_power_profile_changed(self, row, _pspec):
-        if self._updating_ui:
-            return
-        idx = row.get_selected()
-        if 0 <= idx < len(POWER_PROFILES):
-            prof_id = POWER_PROFILES[idx][0]
-            if set_power_profile(prof_id):
-                self.active_power_profile = prof_id
-                if prof_id != "performance" and self.cfg.get("g_mode"):
-                    self.cfg["g_mode"] = False
-                    save_config(self.cfg)
-                    self._sync_window_from_config()
-                self._notify_menu_updated()
+        if not self._updating_ui and 0 <= row.get_selected() < len(POWER_PROFILES):
+            self._apply_power_profile(POWER_PROFILES[row.get_selected()][0])
 
 
 def run_gtk_app(argv):

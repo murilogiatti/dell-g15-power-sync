@@ -6,11 +6,9 @@ Data-Oriented Design: flat lookup tables for presets, effects, brightness tiers,
 hotkeys, hardware telemetry, power profiles, atomic config, diagnostics, and self-updater.
 """
 
-import fcntl
+import base64
 import glob
-import contextlib
 import json
-import math
 import os
 import re
 import struct
@@ -18,6 +16,8 @@ import subprocess
 import sys
 import time
 import urllib.request
+import urllib.error
+import urllib.parse
 
 # --- Configuration & Asset Paths ---
 CONFIG_DIR = os.path.join(
@@ -35,12 +35,14 @@ ASSETS_DIR = DATA_DIR if os.path.isdir(DATA_DIR) else REPO_ASSETS_DIR
 VERSION_FILE = os.path.join(DATA_DIR, "version.json")
 
 GITHUB_REPO = "murilogiatti/dell-g15-power-sync"
-GITHUB_API_COMMITS_URL = f"https://api.github.com/repos/{GITHUB_REPO}/commits/main"
+GITHUB_API_COMMITS_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 GITHUB_RAW_REPO_URL = f"https://raw.githubusercontent.com/{GITHUB_REPO}"
 
 UPDATE_FILES_MAP = (
     ("bin/g15-daemon", os.path.expanduser("~/.local/bin/g15-daemon"), 0o755),
     ("bin/g15-tray", os.path.expanduser("~/.local/bin/g15-tray"), 0o755),
+    ("bin/g15_install.py", os.path.expanduser("~/.local/bin/g15_install.py"), 0o644),
+    ("bin/g15_config.py", os.path.expanduser("~/.local/bin/g15_config.py"), 0o644),
     ("bin/g15_core.py", os.path.expanduser("~/.local/bin/g15_core.py"), 0o644),
     ("bin/g15_gtk.py", os.path.expanduser("~/.local/bin/g15_gtk.py"), 0o644),
     ("bin/g15_qt.py", os.path.expanduser("~/.local/bin/g15_qt.py"), 0o644),
@@ -51,36 +53,32 @@ UPDATE_FILES_MAP = (
     ("assets/tray-icon.png", os.path.join(DATA_DIR, "tray-icon.png"), 0o644),
     (
         "assets/logo.svg",
-        os.path.expanduser(
-            "~/.local/share/icons/hicolor/scalable/apps/io.github.murilogiatti.DellG15Control.svg"
-        ),
+        os.path.join(os.path.dirname(DATA_DIR), "icons/hicolor/scalable/apps/io.github.murilogiatti.DellG15Control.svg"),
         0o644,
     ),
     (
         "assets/logo.png",
-        os.path.expanduser(
-            "~/.local/share/icons/hicolor/256x256/apps/io.github.murilogiatti.DellG15Control.png"
-        ),
+        os.path.join(os.path.dirname(DATA_DIR), "icons/hicolor/256x256/apps/io.github.murilogiatti.DellG15Control.png"),
         0o644,
     ),
     (
         "assets/logo.svg",
-        os.path.expanduser("~/.local/share/icons/hicolor/scalable/apps/dell-g15-control.svg"),
+        os.path.join(os.path.dirname(DATA_DIR), "icons/hicolor/scalable/apps/dell-g15-control.svg"),
         0o644,
     ),
     (
         "assets/logo.png",
-        os.path.expanduser("~/.local/share/icons/hicolor/256x256/apps/dell-g15-control.png"),
+        os.path.join(os.path.dirname(DATA_DIR), "icons/hicolor/256x256/apps/dell-g15-control.png"),
         0o644,
     ),
     (
         "assets/tray-icon.svg",
-        os.path.expanduser("~/.local/share/icons/hicolor/scalable/status/tray-icon.svg"),
+        os.path.join(os.path.dirname(DATA_DIR), "icons/hicolor/scalable/status/tray-icon.svg"),
         0o644,
     ),
     (
         "assets/tray-icon.png",
-        os.path.expanduser("~/.local/share/icons/hicolor/64x64/status/tray-icon.png"),
+        os.path.join(os.path.dirname(DATA_DIR), "icons/hicolor/64x64/status/tray-icon.png"),
         0o644,
     ),
     (
@@ -101,22 +99,7 @@ VALID_MODES = ("static", "breathing", "pulse", "morph", "spectrum", "rainbow")
 # Use a bounded 30-second budget including controller discovery and ioctl overhead.
 BOOT_SAVE_TIMEOUT_SEC = 30
 
-DEFAULT_CONFIG = {
-    "sync_screen": True,
-    "manual_brightness": 100,
-    "mode": "static",
-    "speed": 40,
-    "per_zone": False,
-    "zones_rgb": ["E6E6E6", "E6E6E6", "E6E6E6", "E6E6E6"],
-    "zones_rgb2": ["00E5FF", "00E5FF", "00E5FF", "00E5FF"],
-    "power_cap": True,
-    "save_boot": False,
-    "save_boot_seq": 0,
-    "save_boot_status": None,
-    "g_mode": False,
-    "pre_gmode": None,
-    "force_seq": 0,
-}
+
 
 # --- Linux evdev Input Constants (Fn+F9 G-Mode & Fn+F5 Backlight Hotkeys) ---
 INPUT_EVENT_STRUCT = struct.Struct("llHHi")
@@ -485,183 +468,23 @@ def probe_system_capabilities():
 
 
 # --- Config Sanitization & Atomic Persistence ---
-def _sanitize_hex_color(val, fallback):
-    clean = str(val or "").lstrip("#").strip().upper()
-    if len(clean) == 6 and all(c in "0123456789ABCDEF" for c in clean):
-        try:
-            int(clean, 16)
-            return clean
-        except ValueError:
-            pass
-    return fallback
-
-
-def _safe_int(val, default, min_val=None, max_val=None):
-    if isinstance(val, bool) or val is None:
-        res = default
-    elif isinstance(val, int):
-        res = val
-    elif isinstance(val, float):
-        if not math.isfinite(val):
-            res = default
-        else:
-            res = int(val)
-    elif isinstance(val, str):
-        s = val.strip()
-        if not s:
-            res = default
-        else:
-            try:
-                res = int(s)
-            except ValueError:
-                try:
-                    f = float(s)
-                    res = int(f) if math.isfinite(f) else default
-                except (ValueError, OverflowError):
-                    res = default
-    else:
-        res = default
-    if min_val is not None:
-        res = max(min_val, res)
-    if max_val is not None:
-        res = min(max_val, res)
-    return res
-
-
-def normalize_config(raw):
-    cfg = dict(DEFAULT_CONFIG)
-    cfg["zones_rgb"] = list(DEFAULT_CONFIG["zones_rgb"])
-    cfg["zones_rgb2"] = list(DEFAULT_CONFIG["zones_rgb2"])
-    if not isinstance(raw, dict):
-        return cfg
-
-    for bool_key in ("sync_screen", "per_zone", "power_cap", "save_boot", "g_mode"):
-        if isinstance(raw.get(bool_key), bool):
-            cfg[bool_key] = raw[bool_key]
-
-    cfg["manual_brightness"] = _safe_int(raw.get("manual_brightness"), 100, 0, 100)
-    cfg["speed"] = _safe_int(raw.get("speed"), 40, 10, 100)
-    cfg["force_seq"] = _safe_int(raw.get("force_seq"), 0, 0, 2_000_000_000)
-
-    cfg["save_boot_seq"] = _safe_int(raw.get("save_boot_seq"), 0, 0, 9_223_372_036_854_775_807)
-
-    raw_mode = raw.get("mode")
-    if isinstance(raw_mode, str) and raw_mode.strip().lower() in VALID_MODES:
-        cfg["mode"] = raw_mode.strip().lower()
-
-    for key, fallback in (("zones_rgb", "E6E6E6"), ("zones_rgb2", "00E5FF")):
-        arr = raw.get(key)
-        if isinstance(arr, list) and len(arr) >= 4:
-            cfg[key] = [_sanitize_hex_color(x, fallback) for x in arr[:4]]
-        else:
-            cfg[key] = [fallback] * 4
-
-    pre = raw.get("pre_gmode")
-    if isinstance(pre, dict):
-        pre_mode = str(pre.get("mode", "static")).strip().lower()
-        if pre_mode not in VALID_MODES:
-            pre_mode = "static"
-        pre_zones = pre.get("zones_rgb")
-        if isinstance(pre_zones, list) and len(pre_zones) >= 4:
-            norm_pre_zones = [_sanitize_hex_color(x, "E6E6E6") for x in pre_zones[:4]]
-        else:
-            norm_pre_zones = list(DEFAULT_CONFIG["zones_rgb"])
-        pre_prof = pre.get("power_profile")
-        if not isinstance(pre_prof, str) or pre_prof not in (
-            "power-saver",
-            "balanced",
-            "performance",
-        ):
-            pre_prof = "balanced"
-        cfg["pre_gmode"] = {
-            "mode": pre_mode,
-            "per_zone": bool(pre.get("per_zone", False))
-            if isinstance(pre.get("per_zone"), bool)
-            else False,
-            "zones_rgb": norm_pre_zones,
-            "power_profile": pre_prof,
-        }
-    else:
-        cfg["pre_gmode"] = None
-
-    sbs = raw.get("save_boot_status")
-    if isinstance(sbs, dict):
-        state = str(sbs.get("state", "")).strip().lower()
-        ok_val = sbs.get("ok")
-        if state in ("running", "done") or isinstance(ok_val, bool):
-            if state not in ("running", "done"):
-                state = "done"
-            cfg["save_boot_status"] = {
-                "seq": _safe_int(sbs.get("seq"), 0, 0, 9_223_372_036_854_775_807),
-                "state": state,
-                "ok": bool(ok_val) if isinstance(ok_val, bool) else None,
-            }
-        else:
-            cfg["save_boot_status"] = None
-    else:
-        cfg["save_boot_status"] = None
-
-    return cfg
+# Shared configuration contains no graphical imports.
+from g15_config import DEFAULT_CONFIG, VALID_MODES, normalize_config, config_lock
+import g15_config as config_store
 
 
 def load_config(path=None):
-    cfg_path = path or CONFIG_PATH
-    raw = None
-    try:
-        with open(cfg_path, "r", encoding="utf-8") as f:
-            raw = json.load(f)
-    except (OSError, ValueError):
-        pass
-    return normalize_config(raw)
-
-
-def _write_config(cfg, path=None):
-    cfg_path = path or CONFIG_PATH
-    cfg_dir = os.path.dirname(cfg_path)
-    os.makedirs(cfg_dir, exist_ok=True)
-    tmp_path = f"{cfg_path}.tmp.{os.getpid()}"
-    with open(tmp_path, "w", encoding="utf-8") as f:
-        json.dump(cfg, f, indent=2)
-    os.replace(tmp_path, cfg_path)
-
-
-@contextlib.contextmanager
-def config_lock(path):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path + ".lock", "a", encoding="utf-8") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            fcntl.flock(lock, fcntl.LOCK_UN)
+    return config_store.load_config(path or CONFIG_PATH)
 
 
 def save_config(cfg, path=None):
-    cfg_path = path or CONFIG_PATH
-    with config_lock(cfg_path):
-        latest = load_config(cfg_path)
-        merged = dict(cfg)
-        # GUI edits must not erase daemon feedback received since the last reload.
-        if latest.get("save_boot_seq", 0) > merged.get("save_boot_seq", 0):
-            merged["save_boot_seq"] = latest["save_boot_seq"]
-            merged["save_boot_status"] = latest.get("save_boot_status")
-            merged["save_boot"] = latest.get("save_boot", False)
-        elif latest.get("save_boot_seq", 0) == merged.get("save_boot_seq", 0):
-            merged["save_boot_status"] = latest.get("save_boot_status")
-            merged["save_boot"] = latest.get("save_boot", False)
-        _write_config(merged, cfg_path)
+    return config_store.save_config(cfg, path or CONFIG_PATH)
 
 
 def update_config_preserving_concurrent_edits(mutator_fn, path=None):
-    cfg_path = path or CONFIG_PATH
-    with config_lock(cfg_path):
-        latest = load_config(cfg_path)
-        mutator_fn(latest)
-        _write_config(latest, cfg_path)
-    return latest
+    return config_store.update_config(mutator_fn, path or CONFIG_PATH)
 
 
-# --- Version & Self-Update Logic (User-Writable Directories Only) ---
 def read_local_version(version_file=None):
     vfile = version_file or VERSION_FILE
     commit = "unknown"
@@ -703,19 +526,26 @@ def local_build_update_notice(commit):
 
 
 def fetch_latest_github_commit():
-    req = urllib.request.Request(
-        GITHUB_API_COMMITS_URL,
-        headers={
-            "User-Agent": "Dell-G15-Control-Center/1.0",
-            "Accept": "application/vnd.github.v3+json",
-        },
-    )
-    with urllib.request.urlopen(req, timeout=8) as resp:
-        data = json.loads(resp.read().decode("utf-8"))
-        remote_sha = str(data.get("sha", "")).strip()
-        raw_msg = str(data.get("commit", {}).get("message", "")).strip()
-        commit_msg = raw_msg.splitlines()[0] if raw_msg else ""
-        return remote_sha, commit_msg
+    """Resolve an approved non-prerelease GitHub release tag to an immutable SHA."""
+    base = f"https://api.github.com/repos/{GITHUB_REPO}"
+    def request(path):
+        req = urllib.request.Request(base + path, headers={"User-Agent": "Dell-G15-Control-Center/2.0", "Accept": "application/vnd.github+json"})
+        with urllib.request.urlopen(req, timeout=8) as response:
+            return json.load(response)
+    try:
+        release = request("/releases/latest")
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            raise RuntimeError(tr("Nenhuma versão estável publicada ainda", "No stable release published yet")) from exc
+        raise
+    if release.get("draft") or release.get("prerelease") or not release.get("tag_name"):
+        raise ValueError("Invalid stable release metadata")
+    tag = urllib.parse.quote(release["tag_name"], safe="")
+    commit = request("/commits/" + tag)
+    sha = str(commit.get("sha", ""))
+    if not re.fullmatch(r"[0-9a-fA-F]{40}", sha):
+        raise ValueError("Release did not resolve to a complete SHA")
+    return sha, str(release.get("name") or release["tag_name"])
 
 
 def is_commit_same_or_ahead(local_commit, remote_sha, repo_dir=""):
@@ -807,6 +637,11 @@ def stage_and_apply_update(
     except Exception as exc:
         raise UpdateError("download", f"Download/validation failed: {exc}") from exc
 
+    vfile = version_file or VERSION_FILE
+    old_version = None
+    if os.path.exists(vfile):
+        with open(vfile, "rb") as stream:
+            old_version = stream.read()
     # Stage 2: Write all staged files next to their destinations before replacing any target
     pid = os.getpid()
     staged_entries = []
@@ -828,6 +663,10 @@ def stage_and_apply_update(
                 prev_mode = os.stat(dest_path).st_mode & 0o777
             staged_entries.append((staged_path, dest_path, prev_bytes, prev_mode))
 
+        # Retain one previous version on disk before applying the new one.
+        snapshot = [(dest, old, mode) for _tmp, dest, old, mode in staged_entries]
+        snapshot.append((vfile, old_version, 0o600))
+        write_update_backup(snapshot, vfile)
         # Stage 3: Swap all staged files into place, rolling back on any error
         for staged_path, dest_path, prev_bytes, prev_mode in staged_entries:
             do_replace(staged_path, dest_path)
@@ -875,6 +714,66 @@ def stage_and_apply_update(
     return clean_sha
 
 
+def write_update_backup(entries, version_file):
+    path = os.path.join(os.path.dirname(version_file), "update-rollback.json")
+    config_store.write_json(path, [{"path": str(dest), "mode": mode,
+        "data": None if content is None else base64.b64encode(content).decode("ascii")}
+        for dest, content, mode in entries])
+
+
+def restore_previous_update(version_file=None, files_map=None):
+    """Explicit rollback; destinations are restricted to the installed application manifest."""
+    vfile = version_file or VERSION_FILE
+    path = os.path.join(os.path.dirname(vfile), "update-rollback.json")
+    allowed = {str(dest) for _rel, dest, _mode in (files_map or UPDATE_FILES_MAP)} | {str(vfile)}
+    if files_map is None:
+        allowed.add(os.path.join(os.path.dirname(DATA_DIR), "applications/io.github.murilogiatti.DellG15Control.desktop"))
+    with config_lock(path):
+        with open(path, encoding="utf-8") as stream:
+            records = json.load(stream)
+        if not isinstance(records, list) or any(r.get("path") not in allowed for r in records):
+            raise ValueError("Invalid rollback destinations")
+        prepared, previous, applied = [], [], []
+        import tempfile
+        try:
+            for record in records:
+                dest = record["path"]
+                old = None
+                if os.path.exists(dest):
+                    with open(dest, "rb") as stream:
+                        old = stream.read()
+                previous.append((dest, old, os.stat(dest).st_mode & 0o777 if old is not None else 0o600))
+                content = None if record["data"] is None else base64.b64decode(record["data"], validate=True)
+                tmp = None
+                if content is not None:
+                    fd, tmp = tempfile.mkstemp(prefix=".g15-rollback-", dir=os.path.dirname(dest))
+                    with os.fdopen(fd, "wb") as stream:
+                        stream.write(content)
+                    os.chmod(tmp, int(record["mode"]) & 0o777)
+                prepared.append((dest, tmp))
+            for dest, tmp in prepared:
+                if tmp is None:
+                    if os.path.exists(dest): os.unlink(dest)
+                else:
+                    os.replace(tmp, dest)
+                applied.append(dest)
+        except Exception:
+            for dest, content, mode in reversed(previous[:len(applied)]):
+                if content is None:
+                    if os.path.exists(dest): os.unlink(dest)
+                else:
+                    fd, tmp = tempfile.mkstemp(prefix=".g15-recover-", dir=os.path.dirname(dest))
+                    with os.fdopen(fd, "wb") as stream: stream.write(content)
+                    os.chmod(tmp, mode)
+                    os.replace(tmp, dest)
+            raise
+        finally:
+            for _dest, tmp in prepared:
+                if tmp and os.path.exists(tmp): os.unlink(tmp)
+        write_update_backup(previous, vfile)
+    return read_local_version(vfile)[0]
+
+
 def restart_systemd_services():
     """Queue restart without waiting for the service containing this process to stop."""
     units = ["dell-g15-daemon.service", "dell-g15-tray.service"]
@@ -890,6 +789,18 @@ def restart_systemd_services():
 
 
 # --- Flat Hardware Telemetry Reader (/sys/class/hwmon) ---
+def daemon_status_label():
+    try:
+        with open(os.path.join(CONFIG_DIR, "daemon-status.json"), encoding="utf-8") as stream:
+            status = json.load(stream)
+        os.kill(int(status["pid"]), 0)
+        if status.get("hardware_ok"):
+            return tr("Daemon ativo • Controlador OK", "Daemon active • Controller OK")
+        return tr("Daemon ativo • Controlador indisponível ou aplicação falhou", "Daemon active • Controller unavailable or write failed")
+    except (OSError, ValueError, KeyError, TypeError):
+        return tr("Daemon indisponível ou sem diagnóstico", "Daemon unavailable or no status")
+
+
 def read_telemetry(hwmon_root="/sys/class/hwmon"):
     """
     Returns flat dict: cpu_c, gpu_c, nvme_c, fan1_rpm, fan2_rpm.
@@ -1073,8 +984,6 @@ def apply_g_mode_transition(
 
     if new_gmode:
         prev_profile = get_prof()
-        if prev_profile == "performance":
-            prev_profile = "balanced"
         cfg["pre_gmode"] = {
             "mode": cfg.get("mode", "static"),
             "per_zone": cfg.get("per_zone", False),
@@ -1139,6 +1048,19 @@ def apply_g_mode_transition(
             "Original keyboard colors restored • Failed to restore power profile",
         )
     return True, active_prof, title, body
+
+
+def run_power_action(cfg, kind, target=None):
+    """Blocking worker operation; callers dispatch it away from their GUI thread."""
+    if kind == "gmode":
+        return apply_g_mode_transition(cfg, target)
+    ok = set_power_profile(target)
+    if ok and target != "performance" and cfg.get("g_mode"):
+        cfg["g_mode"] = False
+        save_config(cfg)
+    return True, get_power_profile(), tr("Perfil de energia", "Power profile"), (
+        tr("Perfil aplicado: ", "Profile applied: ") + str(target) if ok
+        else tr("Não foi possível aplicar o perfil solicitado", "Could not apply requested profile"))
 
 
 def apply_backlight_cycle(cfg, save_fn=None):

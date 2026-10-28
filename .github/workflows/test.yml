@@ -24,7 +24,7 @@ jobs:
         run: shellcheck install.sh uninstall.sh
 
       - name: Check Python syntax
-        run: python3 -m py_compile bin/g15-daemon bin/g15-tray bin/g15_core.py bin/g15_gtk.py bin/g15_qt.py
+        run: python3 -m py_compile bin/g15-daemon bin/g15-tray bin/g15_config.py bin/g15_install.py bin/g15_core.py bin/g15_gtk.py bin/g15_qt.py
 
       - name: Run Python Unit Tests
         run: python3 -m unittest discover -s tests -p "test_*.py" -v
@@ -41,4 +41,4 @@ jobs:
           QT_QPA_PLATFORM: offscreen
           QT_QUICK_BACKEND: software
           PYTHONDONTWRITEBYTECODE: '1'
-        run: python3 -m unittest discover -s tests -p 'test_regressions.py' -v
+        run: python3 -m unittest discover -s tests -p 'test_*.py' -v

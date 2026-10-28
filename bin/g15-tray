@@ -109,6 +109,15 @@ def main(argv=None):
         print(str(exc), file=sys.stderr)
         return 2
 
+    if "--rollback" in clean_argv:
+        try:
+            version = core.restore_previous_update()
+            ok, detail = core.restart_systemd_services()
+            print(f"Restored version: {version}. {detail}")
+            return 0 if ok else 1
+        except (OSError, ValueError, RuntimeError) as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
     if "--diagnose" in clean_argv:
         import json
         print(json.dumps(core.probe_system_capabilities(), indent=2))
