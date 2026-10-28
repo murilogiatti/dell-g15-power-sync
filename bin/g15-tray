@@ -555,7 +555,7 @@ class G15ControlApp(Adw.Application):
                 self._last_backlight_ts = now
                 self.cycle_backlight_mode(notify=True)
 
-    # --- Fn+F9 G-Mode Action (Performance Profile + G15 Red #FF2200) ---
+    # --- Fn+F9 G-Mode Action (Performance Profile + Pure Red #FF0000, preserving brightness) ---
     def toggle_g_mode(self, target_state=None, notify=True):
         cur_gmode = bool(self.cfg.get("g_mode", False))
         new_gmode = (not cur_gmode) if target_state is None else bool(target_state)
@@ -563,20 +563,16 @@ class G15ControlApp(Adw.Application):
             return
 
         if new_gmode:
-            # Save current user lighting profile before switching to G-Mode Red
+            # Save current user color/effect profile before switching to Pure Red (keep brightness intact)
             self.cfg["pre_gmode"] = {
-                "sync_screen": self.cfg.get("sync_screen", True),
-                "manual_brightness": self.cfg.get("manual_brightness", 100),
                 "mode": self.cfg.get("mode", "static"),
                 "per_zone": self.cfg.get("per_zone", False),
                 "zones_rgb": list(self.cfg.get("zones_rgb", DEFAULT_CONFIG["zones_rgb"])),
             }
             self.cfg["g_mode"] = True
-            self.cfg["sync_screen"] = False
-            self.cfg["manual_brightness"] = 100
             self.cfg["mode"] = "static"
             self.cfg["per_zone"] = False
-            self.cfg["zones_rgb"] = ["FF2200"] * 4
+            self.cfg["zones_rgb"] = ["FF0000"] * 4
             self.cfg["force_seq"] = int(self.cfg.get("force_seq", 0)) + 1
             save_config(self.cfg)
 
@@ -587,22 +583,19 @@ class G15ControlApp(Adw.Application):
                 self.send_osd_notification(
                     tr("🚀 Modo G Ativado (Game Shift)", "🚀 G-Mode Enabled (Game Shift)"),
                     tr(
-                        "Perfil em Alto Desempenho • Teclado em Vermelho G15 (100%)",
-                        "High Performance profile active • Keyboard set to G15 Red (100%)",
+                        "Perfil em Alto Desempenho • Teclado em Vermelho Puro",
+                        "High Performance profile active • Keyboard set to Pure Red",
                     ),
                 )
         else:
-            # Restore user's pre-G-Mode lighting settings
+            # Restore user's pre-G-Mode color/effect settings while preserving current brightness
             pre = self.cfg.get("pre_gmode")
             if isinstance(pre, dict):
-                self.cfg["sync_screen"] = bool(pre.get("sync_screen", True))
-                self.cfg["manual_brightness"] = int(pre.get("manual_brightness", 100))
                 self.cfg["mode"] = str(pre.get("mode", "static"))
                 self.cfg["per_zone"] = bool(pre.get("per_zone", False))
                 if isinstance(pre.get("zones_rgb"), list) and len(pre["zones_rgb"]) == 4:
                     self.cfg["zones_rgb"] = list(pre["zones_rgb"])
             else:
-                self.cfg["sync_screen"] = True
                 self.cfg["zones_rgb"] = ["E6E6E6"] * 4
 
             self.cfg["g_mode"] = False
@@ -617,8 +610,8 @@ class G15ControlApp(Adw.Application):
                 self.send_osd_notification(
                     tr("⚖️ Modo G Desativado (Equilibrado)", "⚖️ G-Mode Disabled (Balanced)"),
                     tr(
-                        "Perfil Equilibrado restaurado • Iluminação original ativa",
-                        "Balanced profile restored • Original keyboard lighting active",
+                        "Perfil Equilibrado restaurado • Cores originais ativas",
+                        "Balanced profile restored • Original keyboard colors active",
                     ),
                 )
 
@@ -1567,8 +1560,8 @@ class G15ControlApp(Adw.Application):
         self._row_gmode = Adw.SwitchRow(
             title=tr("🚀 Modo G / Game Shift (Tecla Fn+F9)", "🚀 G-Mode / Game Shift (Fn+F9 Key)"),
             subtitle=tr(
-                "Ativa Alto Desempenho e aplica Vermelho G15 (100%); restaura seu perfil ao desligar",
-                "Activates High Performance and G15 Red (100%); restores your profile when disabled",
+                "Ativa Alto Desempenho e aplica Vermelho Puro mantendo o brilho atual; restaura suas cores ao desligar",
+                "Activates High Performance and Pure Red keeping current brightness; restores your colors when disabled",
             ),
         )
         self._row_gmode.connect("notify::active", self._on_ui_gmode_toggled)
