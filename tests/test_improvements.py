@@ -195,6 +195,44 @@ class Improvements(unittest.TestCase):
             label=core.daemon_status_label()
             self.assertTrue('indisponível' in label or 'unavailable' in label)
 
+    def test_rollback_recovery_continues_after_a_second_failure(self):
+        manifest=[]
+        for name in ('a','b','c'):
+            dest=self.root/name
+            dest.write_bytes(b'current')
+            manifest.append(('assets/'+name,str(dest),0o600))
+        version=str(self.root/'version.json')
+        core.write_update_backup([(dest,b'old',mode) for _,dest,mode in manifest],version)
+        real=os.replace
+        def fail_twice(src,dst):
+            if ('.g15-rollback-' in str(src) and str(dst).endswith('/c')) or ('.g15-recover-' in str(src) and str(dst).endswith('/b')):
+                raise OSError('injected')
+            real(src,dst)
+        with mock.patch.object(core.os,'replace',side_effect=fail_twice):
+            with self.assertRaises(core.UpdateError) as error:
+                core.restore_previous_update(version,manifest)
+        self.assertEqual((self.root/'a').read_bytes(),b'current')
+        self.assertEqual((self.root/'c').read_bytes(),b'current')
+        self.assertTrue(error.exception.rollback_errors)
+        recovery=list(self.root.glob('.g15-recover-*'))
+        self.assertEqual(len(recovery),1)
+        self.assertEqual(recovery[0].read_bytes(),b'current')
+        self.assertFalse(list(self.root.glob('.g15-rollback-*')))
+
+    def test_invalid_rollback_manifest_is_rejected_before_mutation(self):
+        dest=self.root/'asset'
+        dest.write_bytes(b'current')
+        version=str(self.root/'version.json')
+        valid={'path':str(dest),'mode':0o600,'data':'b2xk'}
+        variants=[[valid,valid],[dict(valid,mode='invalid')],[dict(valid,data='%%%')],
+                  [{'path':str(dest),'mode':0o600}]]
+        for records in variants:
+            (self.root/'update-rollback.json').write_text(json.dumps(records))
+            with self.assertRaises(ValueError):
+                core.restore_previous_update(version,[('assets/a',str(dest),0o600)])
+            self.assertEqual(dest.read_bytes(),b'current')
+            self.assertFalse(list(self.root.glob('.g15-rollback-*')))
+
     def test_install_mid_copy_failure_restores_previous_files(self):
         self.install_failure('copy')
 

@@ -733,17 +733,29 @@ def restore_previous_update(version_file=None, files_map=None):
             records = json.load(stream)
         if not isinstance(records, list) or any(not isinstance(r, dict) or r.get("path") not in allowed for r in records):
             raise ValueError("Invalid rollback destinations")
+        if len({r["path"] for r in records}) != len(records):
+            raise ValueError("Duplicate rollback destinations")
+        decoded = []
+        for record in records:
+            if type(record.get("mode")) is not int or not 0 <= record["mode"] <= 0o777:
+                raise ValueError("Invalid rollback permissions")
+            if "data" not in record or (record["data"] is not None and not isinstance(record["data"], str)):
+                raise ValueError("Invalid rollback payload")
+            try:
+                content = None if record["data"] is None else base64.b64decode(record["data"], validate=True)
+            except ValueError as exc:
+                raise ValueError("Invalid rollback payload encoding") from exc
+            decoded.append((record, content))
         prepared, previous, applied = [], [], []
         import tempfile
         try:
-            for record in records:
+            for record, content in decoded:
                 dest = record["path"]
                 old = None
                 if os.path.exists(dest):
                     with open(dest, "rb") as stream:
                         old = stream.read()
                 previous.append((dest, old, os.stat(dest).st_mode & 0o777 if old is not None else 0o600))
-                content = None if record["data"] is None else base64.b64decode(record["data"], validate=True)
                 tmp = None
                 if content is not None:
                     fd, tmp = tempfile.mkstemp(prefix=".g15-rollback-", dir=os.path.dirname(dest))
@@ -759,15 +771,23 @@ def restore_previous_update(version_file=None, files_map=None):
                 else:
                     os.replace(tmp, dest)
                 applied.append(dest)
-        except Exception:
+        except Exception as apply_error:
+            recovery_errors = []
             for dest, content, mode in reversed(previous[:len(applied)]):
-                if content is None:
-                    if os.path.exists(dest): os.unlink(dest)
-                else:
-                    fd, tmp = tempfile.mkstemp(prefix=".g15-recover-", dir=os.path.dirname(dest))
-                    with os.fdopen(fd, "wb") as stream: stream.write(content)
-                    os.chmod(tmp, mode)
-                    os.replace(tmp, dest)
+                tmp = None
+                try:
+                    if content is None:
+                        if os.path.exists(dest): os.unlink(dest)
+                    else:
+                        fd, tmp = tempfile.mkstemp(prefix=".g15-recover-", dir=os.path.dirname(dest))
+                        with os.fdopen(fd, "wb") as stream: stream.write(content)
+                        os.chmod(tmp, mode)
+                        os.replace(tmp, dest)
+                except Exception as recovery_error:
+                    recovery_errors.append(f"{dest}: {recovery_error}; retained recovery file: {tmp}")
+            if recovery_errors:
+                raise UpdateError("rollback", f"Restore failed ({apply_error}); recovery errors: {'; '.join(recovery_errors)}",
+                                  rollback_errors=recovery_errors) from apply_error
             raise
         finally:
             for _dest, tmp in prepared:
