@@ -59,6 +59,14 @@ chmod +x "$HOME/.local/bin/g15-daemon" "$HOME/.local/bin/g15-tray"
 mkdir -p "$HOME/.local/share/dell-g15"
 cp "$SCRIPT_DIR/assets/"* "$HOME/.local/share/dell-g15/"
 
+COMMIT_SHA=$(git -C "$SCRIPT_DIR" rev-parse HEAD 2>/dev/null || echo "unknown")
+cat > "$HOME/.local/share/dell-g15/version.json" <<EOF
+{
+  "commit": "$COMMIT_SHA",
+  "repo_dir": "$SCRIPT_DIR"
+}
+EOF
+
 mkdir -p "$HOME/.local/share/icons/hicolor/scalable/apps"
 mkdir -p "$HOME/.local/share/icons/hicolor/256x256/apps"
 mkdir -p "$HOME/.local/share/icons/hicolor/scalable/status"

@@ -10,8 +10,11 @@ import json
 import os
 import signal
 import struct
+import subprocess
 import sys
+import threading
 import time
+import urllib.request
 import warnings
 
 import gi
@@ -34,6 +37,50 @@ REPO_ASSETS_DIR = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "assets")
 )
 ASSETS_DIR = DATA_DIR if os.path.isdir(DATA_DIR) else REPO_ASSETS_DIR
+VERSION_FILE = os.path.join(DATA_DIR, "version.json")
+
+GITHUB_REPO = "murilogiatti/dell-g15-power-sync"
+GITHUB_API_COMMITS_URL = f"https://api.github.com/repos/{GITHUB_REPO}/commits/main"
+GITHUB_RAW_BASE_URL = f"https://raw.githubusercontent.com/{GITHUB_REPO}/main"
+UPDATE_FILES_MAP = (
+    ("bin/g15-daemon", os.path.expanduser("~/.local/bin/g15-daemon"), 0o755),
+    ("bin/g15-tray", os.path.expanduser("~/.local/bin/g15-tray"), 0o755),
+    ("assets/banner.svg", os.path.join(DATA_DIR, "banner.svg"), 0o644),
+    ("assets/logo.svg", os.path.join(DATA_DIR, "logo.svg"), 0o644),
+    ("assets/logo.png", os.path.join(DATA_DIR, "logo.png"), 0o644),
+    ("assets/tray-icon.svg", os.path.join(DATA_DIR, "tray-icon.svg"), 0o644),
+    ("assets/tray-icon.png", os.path.join(DATA_DIR, "tray-icon.png"), 0o644),
+    (
+        "assets/logo.svg",
+        os.path.expanduser("~/.local/share/icons/hicolor/scalable/apps/dell-g15-control.svg"),
+        0o644,
+    ),
+    (
+        "assets/logo.png",
+        os.path.expanduser("~/.local/share/icons/hicolor/256x256/apps/dell-g15-control.png"),
+        0o644,
+    ),
+    (
+        "assets/tray-icon.svg",
+        os.path.expanduser("~/.local/share/icons/hicolor/scalable/status/tray-icon.svg"),
+        0o644,
+    ),
+    (
+        "assets/tray-icon.png",
+        os.path.expanduser("~/.local/share/icons/hicolor/64x64/status/tray-icon.png"),
+        0o644,
+    ),
+    (
+        "systemd/dell-g15-daemon.service",
+        os.path.expanduser("~/.config/systemd/user/dell-g15-daemon.service"),
+        0o644,
+    ),
+    (
+        "systemd/dell-g15-tray.service",
+        os.path.expanduser("~/.config/systemd/user/dell-g15-tray.service"),
+        0o644,
+    ),
+)
 
 DEFAULT_CONFIG = {
     "sync_screen": True,
@@ -145,6 +192,44 @@ def save_config(cfg):
     with open(tmp_path, "w", encoding="utf-8") as f:
         json.dump(cfg, f, indent=2)
     os.replace(tmp_path, CONFIG_PATH)
+
+
+def read_local_version():
+    commit = "unknown"
+    repo_dir = ""
+    try:
+        if os.path.exists(VERSION_FILE):
+            with open(VERSION_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                commit = str(data.get("commit", "unknown")).strip()
+                repo_dir = str(data.get("repo_dir", "")).strip()
+    except (OSError, ValueError):
+        pass
+
+    if (not commit or commit == "unknown") and repo_dir and os.path.isdir(repo_dir):
+        try:
+            out = subprocess.check_output(
+                ["git", "-C", repo_dir, "rev-parse", "HEAD"],
+                stderr=subprocess.DEVNULL,
+                timeout=2,
+            )
+            commit = out.decode("utf-8").strip()
+        except Exception:
+            pass
+    return commit, repo_dir
+
+
+def write_local_version(commit, repo_dir=""):
+    try:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        payload = {"commit": commit, "repo_dir": repo_dir}
+        tmp_path = f"{VERSION_FILE}.tmp.{os.getpid()}"
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2)
+            f.write("\n")
+        os.replace(tmp_path, VERSION_FILE)
+    except OSError:
+        pass
 
 
 def hex_to_rgba(hex_str):
@@ -405,6 +490,13 @@ class G15ControlApp(Adw.Application):
         self._last_backlight_ts = 0.0
         self._pending_scancode = 0
         self._evdev_fds = []
+        self.local_commit, self.repo_dir = read_local_version()
+        self.latest_commit = self.local_commit
+        self.latest_commit_msg = ""
+        self.update_available = False
+        self._checking_update = False
+        self._updating_app = False
+        self._notified_commit = ""
 
     def do_startup(self):
         Adw.Application.do_startup(self)
@@ -431,6 +523,8 @@ class G15ControlApp(Adw.Application):
         self._setup_config_monitor()
         self._setup_hotkey_monitors()
         GLib.timeout_add_seconds(3, self._on_telemetry_tick)
+        GLib.timeout_add_seconds(12, self._initial_update_check)
+        GLib.timeout_add_seconds(21600, self._periodic_update_check)
 
     def do_command_line(self, command_line):
         args = command_line.get_arguments()[1:]
@@ -438,6 +532,10 @@ class G15ControlApp(Adw.Application):
             self.toggle_g_mode(notify=True)
         elif "--cycle-backlight" in args:
             self.cycle_backlight_mode(notify=True)
+        elif "--check-update" in args:
+            self.check_for_updates_async(manual=True)
+        elif "--self-update" in args:
+            self.perform_self_update_async()
         elif "--show" in args or not self.start_hidden:
             self.present_control_window()
         else:
@@ -886,6 +984,25 @@ class G15ControlApp(Adw.Application):
             )
         )
 
+        # 2b. Prominent Update Banner in Tray if an update is available
+        if self.update_available:
+            short_sha = self.latest_commit[:7] if self.latest_commit else "new"
+            root_children_ids.append(
+                register_node(
+                    5,
+                    {
+                        "label": GLib.Variant(
+                            "s",
+                            tr(
+                                f"🔄 Atualização Disponível ({short_sha}) — Instalar Agora",
+                                f"🔄 Update Available ({short_sha}) — Install Now",
+                            ),
+                        )
+                    },
+                    action=self.perform_self_update_async,
+                )
+            )
+
         # 3. Quick G-Mode (Fn+F9) Toggle in Tray
         gmode_active = bool(self.cfg.get("g_mode", False))
         root_children_ids.append(
@@ -1044,6 +1161,28 @@ class G15ControlApp(Adw.Application):
             )
         )
 
+        # 9. Check / Install Updates directly from Tray
+        if self.update_available:
+            upd_lbl = tr(
+                f"🔄 Instalar Atualização ({self.latest_commit[:7]})",
+                f"🔄 Install Update ({self.latest_commit[:7]})",
+            )
+            upd_act = self.perform_self_update_async
+        else:
+            upd_lbl = tr(
+                "🔍 Verificar Atualizações...",
+                "🔍 Check for Updates...",
+            )
+            upd_act = lambda: self.check_for_updates_async(manual=True)
+
+        root_children_ids.append(
+            register_node(
+                62,
+                {"label": GLib.Variant("s", upd_lbl)},
+                action=upd_act,
+            )
+        )
+
         root_props = {"children-display": GLib.Variant("s", "submenu")}
         self.menu_items_flat[0] = root_props
         self.menu_nodes[0] = (0, root_props, root_children_ids)
@@ -1116,6 +1255,285 @@ class G15ControlApp(Adw.Application):
                 )
             )
             self._toast_overlay.add_toast(toast)
+
+    # --- Built-in Update Checker & 1-Click Self-Updater ---
+    def _initial_update_check(self):
+        self.check_for_updates_async(manual=False)
+        return False
+
+    def _periodic_update_check(self):
+        self.check_for_updates_async(manual=False)
+        return True
+
+    def _format_update_subtitle(self):
+        short_local = (
+            self.local_commit[:7]
+            if self.local_commit and self.local_commit != "unknown"
+            else "local"
+        )
+        if self._updating_app:
+            return tr(
+                "Baixando e aplicando atualização oficial do GitHub...",
+                "Downloading and applying official update from GitHub...",
+            )
+        if self._checking_update:
+            return tr(
+                "Consultando repositório oficial no GitHub...",
+                "Checking official GitHub repository...",
+            )
+        if self.update_available:
+            short_new = self.latest_commit[:7] if self.latest_commit else "new"
+            msg = self.latest_commit_msg or ""
+            return tr(
+                f"Nova versão disponível ({short_new}): {msg}",
+                f"New version available ({short_new}): {msg}",
+            )
+        return tr(
+            f"Versão instalada: #{short_local} — Verifica automaticamente novas versões no GitHub",
+            f"Installed version: #{short_local} — Automatically checks for new versions on GitHub",
+        )
+
+    def _format_update_button_label(self):
+        if self._updating_app:
+            return tr("⏳ Atualizando...", "⏳ Updating...")
+        if self._checking_update:
+            return tr("⏳ Verificando...", "⏳ Checking...")
+        if self.update_available:
+            return tr("🔄 Instalar Atualização", "🔄 Install Update")
+        return tr("🔍 Verificar Agora", "🔍 Check Now")
+
+    def _refresh_update_ui(self):
+        if self.window is None or not hasattr(self, "_row_update"):
+            return
+        self._row_update.set_subtitle(self._format_update_subtitle())
+        self._btn_update.set_label(self._format_update_button_label())
+        self._btn_update.set_sensitive(not (self._checking_update or self._updating_app))
+        if self.update_available:
+            self._btn_update.add_css_class("suggested-action")
+        else:
+            self._btn_update.remove_css_class("suggested-action")
+
+    def _on_ui_update_clicked(self, _btn):
+        if self.update_available:
+            self.perform_self_update_async()
+        else:
+            self.check_for_updates_async(manual=True)
+
+    def check_for_updates_async(self, manual=False):
+        if self._checking_update or self._updating_app:
+            return
+        self._checking_update = True
+        self._refresh_update_ui()
+
+        def worker():
+            remote_sha = ""
+            commit_msg = ""
+            err_msg = ""
+            try:
+                req = urllib.request.Request(
+                    GITHUB_API_COMMITS_URL,
+                    headers={
+                        "User-Agent": "Dell-G15-Control-Center/1.0",
+                        "Accept": "application/vnd.github.v3+json",
+                    },
+                )
+                with urllib.request.urlopen(req, timeout=8) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
+                    remote_sha = str(data.get("sha", "")).strip()
+                    raw_msg = str(
+                        data.get("commit", {}).get("message", "")
+                    ).strip()
+                    commit_msg = raw_msg.splitlines()[0] if raw_msg else ""
+            except Exception as exc:
+                err_msg = str(exc)
+
+            GLib.idle_add(
+                self._on_update_check_done, remote_sha, commit_msg, manual, err_msg
+            )
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_update_check_done(self, remote_sha, commit_msg, manual, err_msg):
+        self._checking_update = False
+        self.local_commit, self.repo_dir = read_local_version()
+
+        if not remote_sha:
+            self._refresh_update_ui()
+            if manual:
+                self.send_osd_notification(
+                    tr("⚠️ Erro ao Verificar Atualizações", "⚠️ Update Check Failed"),
+                    tr(
+                        f"Não foi possível conectar ao GitHub: {err_msg}",
+                        f"Could not reach GitHub: {err_msg}",
+                    ),
+                )
+            return False
+
+        if not self.local_commit or self.local_commit == "unknown":
+            self.local_commit = remote_sha
+            write_local_version(remote_sha, self.repo_dir)
+
+        # Check if local_commit is already equal to or ahead of remote_sha
+        is_same_or_ahead = remote_sha == self.local_commit
+        if not is_same_or_ahead and self.repo_dir and os.path.isdir(self.repo_dir):
+            try:
+                rc = subprocess.call(
+                    [
+                        "git",
+                        "-C",
+                        self.repo_dir,
+                        "merge-base",
+                        "--is-ancestor",
+                        remote_sha,
+                        self.local_commit,
+                    ],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=2,
+                )
+                if rc == 0:
+                    is_same_or_ahead = True
+            except Exception:
+                pass
+
+        if not is_same_or_ahead:
+            self.update_available = True
+            self.latest_commit = remote_sha
+            self.latest_commit_msg = commit_msg
+            self._notify_menu_updated()
+            self._refresh_update_ui()
+            if manual or self._notified_commit != remote_sha:
+                self._notified_commit = remote_sha
+                self.send_osd_notification(
+                    tr(
+                        "🔄 Atualização Disponível!",
+                        "🔄 Update Available!",
+                    ),
+                    tr(
+                        f"Nova versão ({remote_sha[:7]}): {commit_msg}. Abra o menu ou painel para instalar em 1 clique.",
+                        f"New version ({remote_sha[:7]}): {commit_msg}. Open tray or panel to install in 1 click.",
+                    ),
+                )
+        else:
+            self.update_available = False
+            self.latest_commit = self.local_commit
+            self._notify_menu_updated()
+            self._refresh_update_ui()
+            if manual:
+                short_sha = self.local_commit[:7]
+                self.send_osd_notification(
+                    tr(
+                        "✅ Aplicativo Atualizado",
+                        "✅ Application Up to Date",
+                    ),
+                    tr(
+                        f"Você já está na versão mais recente (#{short_sha}).",
+                        f"You are already running the latest version (#{short_sha}).",
+                    ),
+                )
+                if self.window and hasattr(self, "_toast_overlay"):
+                    toast = Adw.Toast.new(
+                        tr(
+                            f"Você já está na versão mais recente (#{short_sha})!",
+                            f"You are already on the latest version (#{short_sha})!",
+                        )
+                    )
+                    self._toast_overlay.add_toast(toast)
+        return False
+
+    def perform_self_update_async(self):
+        if self._updating_app:
+            return
+        self._updating_app = True
+        self._refresh_update_ui()
+        self.send_osd_notification(
+            tr("⏳ Atualizando Dell G15 Control...", "⏳ Updating Dell G15 Control..."),
+            tr(
+                "Baixando arquivos mais recentes do GitHub...",
+                "Downloading latest files from GitHub...",
+            ),
+        )
+
+        def worker():
+            err_msg = ""
+            target_sha = self.latest_commit
+            try:
+                if not target_sha or target_sha == "unknown":
+                    req = urllib.request.Request(
+                        GITHUB_API_COMMITS_URL,
+                        headers={"User-Agent": "Dell-G15-Control-Center/1.0"},
+                    )
+                    with urllib.request.urlopen(req, timeout=8) as resp:
+                        data = json.loads(resp.read().decode("utf-8"))
+                        target_sha = str(data.get("sha", "")).strip()
+
+                for rel_path, dest_path, mode in UPDATE_FILES_MAP:
+                    url = f"{GITHUB_RAW_BASE_URL}/{rel_path}"
+                    req = urllib.request.Request(
+                        url, headers={"User-Agent": "Dell-G15-Control-Center/1.0"}
+                    )
+                    with urllib.request.urlopen(req, timeout=12) as resp:
+                        content = resp.read()
+                    os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+                    tmp_dest = f"{dest_path}.tmp.{os.getpid()}"
+                    with open(tmp_dest, "wb") as f:
+                        f.write(content)
+                    os.chmod(tmp_dest, mode)
+                    os.replace(tmp_dest, dest_path)
+
+                if self.repo_dir and os.path.isdir(os.path.join(self.repo_dir, ".git")):
+                    subprocess.call(
+                        ["git", "-C", self.repo_dir, "pull", "--ff-only"],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        timeout=10,
+                    )
+
+                if target_sha:
+                    write_local_version(target_sha, self.repo_dir)
+            except Exception as exc:
+                err_msg = str(exc)
+
+            GLib.idle_add(self._on_self_update_done, target_sha, err_msg)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_self_update_done(self, target_sha, err_msg):
+        self._updating_app = False
+        if err_msg:
+            self._refresh_update_ui()
+            self.send_osd_notification(
+                tr("❌ Falha na Atualização", "❌ Update Failed"),
+                tr(
+                    f"Erro ao atualizar: {err_msg}",
+                    f"Error updating: {err_msg}",
+                ),
+            )
+            return False
+
+        self.local_commit = target_sha or self.local_commit
+        self.update_available = False
+        self._notify_menu_updated()
+        self._refresh_update_ui()
+        short_sha = self.local_commit[:7] if self.local_commit else "new"
+        self.send_osd_notification(
+            tr("✅ Atualização Concluída!", "✅ Update Complete!"),
+            tr(
+                f"Versão #{short_sha} instalada! Reiniciando serviços automaticamente...",
+                f"Version #{short_sha} installed! Automatically restarting services...",
+            ),
+        )
+        subprocess.call(["systemctl", "--user", "daemon-reload"])
+        subprocess.Popen(
+            [
+                "systemctl",
+                "--user",
+                "restart",
+                "dell-g15-daemon.service",
+                "dell-g15-tray.service",
+            ]
+        )
+        return False
 
     def _notify_menu_updated(self):
         self._rebuild_menu_model()
@@ -1592,6 +2010,16 @@ class G15ControlApp(Adw.Application):
         self._row_telemetry.add_suffix(self._lbl_telemetry)
         grp_hw.add(self._row_telemetry)
 
+        self._row_update = Adw.ActionRow(
+            title=tr("Atualizações do Aplicativo", "Application Updates"),
+            subtitle=self._format_update_subtitle(),
+        )
+        self._btn_update = Gtk.Button(label=self._format_update_button_label())
+        self._btn_update.set_valign(Gtk.Align.CENTER)
+        self._btn_update.connect("clicked", self._on_ui_update_clicked)
+        self._row_update.add_suffix(self._btn_update)
+        grp_hw.add(self._row_update)
+
         page.add(grp_hw)
         self._unclamp_and_unwrap_tree(page)
 
@@ -1642,6 +2070,8 @@ class G15ControlApp(Adw.Application):
                 self._color_btns_1[idx].set_rgba(hex_to_rgba(z1[idx]))
                 self._color_btns_2[idx].set_rgba(hex_to_rgba(z2[idx]))
                 self._color_btns_2[idx].set_visible(is_morph)
+
+            self._refresh_update_ui()
         finally:
             self._updating_ui = False
 
