@@ -1539,6 +1539,23 @@ class G15ControlApp(Adw.Application):
             ),
         )
         subprocess.call(["systemctl", "--user", "daemon-reload"])
+        stale_default_want = os.path.expanduser(
+            "~/.config/systemd/user/default.target.wants/dell-g15-tray.service"
+        )
+        if os.path.lexists(stale_default_want):
+            try:
+                os.remove(stale_default_want)
+            except OSError:
+                pass
+        subprocess.call(
+            [
+                "systemctl",
+                "--user",
+                "enable",
+                "dell-g15-daemon.service",
+                "dell-g15-tray.service",
+            ]
+        )
         subprocess.Popen(
             [
                 "systemctl",
@@ -2219,6 +2236,11 @@ class G15ControlApp(Adw.Application):
 
 
 def main():
+    if not os.environ.get("WAYLAND_DISPLAY") and not os.environ.get("DISPLAY"):
+        sys.stderr.write(
+            "g15-tray: no WAYLAND_DISPLAY or DISPLAY set; skipping headless startup.\n"
+        )
+        return 0
     signal.signal(signal.SIGINT, signal.SIG_DFL)
     signal.signal(signal.SIGTERM, lambda *_a: sys.exit(0))
     GLib.set_prgname("io.github.murilogiatti.DellG15Control")

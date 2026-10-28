@@ -46,6 +46,7 @@ systemctl --user disable dell-g15-update.service 2>/dev/null || true
 
 rm -f "$HOME/.config/systemd/user/dell-g15-update.timer"
 rm -f "$HOME/.config/systemd/user/dell-g15-update.service"
+rm -f "$HOME/.config/systemd/user/default.target.wants/dell-g15-tray.service"
 rm -f "$HOME/.local/bin/g15-daemon.sh"
 rm -f "$HOME/.local/bin/g15-cycle.sh"
 rm -f "$HOME/.local/bin/g15-update.sh"
