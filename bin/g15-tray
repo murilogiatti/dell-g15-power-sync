@@ -61,6 +61,7 @@ GMODE_SCANCODES = (0x68, 0x12000C)
 GMODE_KEYCODES = (701, 594, 595)  # KEY_PERFORMANCE / G-Mode
 
 BACKLIGHT_SCANCODES = (
+    0x69,
     0x95,
     0x10001E,
     0x10001F,
@@ -70,7 +71,7 @@ BACKLIGHT_SCANCODES = (
     0x100851,
     0x100852,
 )
-BACKLIGHT_KEYCODES = (228, 229, 230, 659)  # KEY_KBDILLUMTOGGLE / DOWN / UP / MACRO4
+BACKLIGHT_KEYCODES = (188, 228, 229, 230, 659)  # KEY_F18 (Dell G15 Fn+F5) / KBDILLUM / MACRO4
 
 # --- Data-Oriented Lookup Tables ---
 BRIGHTNESS_STEPS = (0, 10, 30, 50, 75, 100)
@@ -402,6 +403,7 @@ class G15ControlApp(Adw.Application):
         self._last_notif_id = 0
         self._last_gmode_ts = 0.0
         self._last_backlight_ts = 0.0
+        self._pending_scancode = 0
         self._evdev_fds = []
 
     def do_startup(self):
@@ -525,31 +527,31 @@ class G15ControlApp(Adw.Application):
         return True
 
     def _process_input_event(self, ev_type, ev_code, ev_value):
+        if ev_type == EV_MSC and ev_code == MSC_SCAN:
+            self._pending_scancode = ev_value
+            return
+
+        if ev_type != EV_KEY:
+            return
+
+        scan = self._pending_scancode
+        self._pending_scancode = 0
+
+        # Only trigger on key press down (ev_value == 1), never on release (0) or repeat (2)
+        if ev_value != 1:
+            return
+
         now = time.monotonic()
         # 1. Match Fn+F9 (G-Mode / Game Shift)
-        is_gmode_scan = (
-            ev_type == EV_MSC and ev_code == MSC_SCAN and ev_value in GMODE_SCANCODES
-        )
-        is_gmode_key = (
-            ev_type == EV_KEY and ev_value == 1 and ev_code in GMODE_KEYCODES
-        )
-        if is_gmode_scan or is_gmode_key:
-            if now - self._last_gmode_ts > 0.35:
+        if ev_code in GMODE_KEYCODES or scan in GMODE_SCANCODES:
+            if now - self._last_gmode_ts > 0.25:
                 self._last_gmode_ts = now
                 self.toggle_g_mode(notify=True)
             return
 
         # 2. Match Fn+F5 (Keyboard Backlight Cycle)
-        is_bl_scan = (
-            ev_type == EV_MSC
-            and ev_code == MSC_SCAN
-            and ev_value in BACKLIGHT_SCANCODES
-        )
-        is_bl_key = (
-            ev_type == EV_KEY and ev_value == 1 and ev_code in BACKLIGHT_KEYCODES
-        )
-        if is_bl_scan or is_bl_key:
-            if now - self._last_backlight_ts > 0.25:
+        if ev_code in BACKLIGHT_KEYCODES or scan in BACKLIGHT_SCANCODES:
+            if now - self._last_backlight_ts > 0.20:
                 self._last_backlight_ts = now
                 self.cycle_backlight_mode(notify=True)
 
@@ -767,8 +769,6 @@ class G15ControlApp(Adw.Application):
             pass
 
     def _current_icon_name(self):
-        if not self.cfg.get("sync_screen", True) and int(self.cfg.get("manual_brightness", 100)) == 0:
-            return "keyboard-brightness-symbolic"
         custom_svg = os.path.join(ASSETS_DIR, "tray-icon.svg")
         if os.path.exists(custom_svg):
             return "tray-icon"
