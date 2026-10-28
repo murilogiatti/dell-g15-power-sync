@@ -9,11 +9,14 @@ import ctypes
 import ctypes.util
 import fcntl
 import glob
+import contextlib
 import json
+import math
 import os
 import select
 import signal
 import socket
+import struct
 import sys
 import time
 
@@ -38,8 +41,14 @@ IN_ATTRIB = 0x00000004
 IN_CLOSE_WRITE = 0x00000008
 IN_MOVED_TO = 0x00000080
 IN_CREATE = 0x00000100
+IN_DELETE = 0x00000200
+IN_DELETE_SELF = 0x00000400
+IN_MOVE_SELF = 0x00000800
+IN_UNMOUNT = 0x00002000
+IN_IGNORED = 0x00008000
 IN_NONBLOCK = 0x00000800
 IN_CLOEXEC = 0x00080000
+INOTIFY_EVENT_HDR = struct.Struct("iIII")
 
 # Platform IDs zone mapping table (matching OpenRGB's AlienwareController)
 PLATFORM_ZONES = {
@@ -81,6 +90,7 @@ DEFAULT_CONFIG = {
     "zones_rgb2": ["00E5FF", "00E5FF", "00E5FF", "00E5FF"],
     "power_cap": True,
     "save_boot": False,
+    "save_boot_seq": 0,
     "save_boot_status": None,
     "g_mode": False,
     "pre_gmode": None,
@@ -98,7 +108,7 @@ CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
 
 def _sanitize_hex_color(val, fallback):
     clean = str(val or "").lstrip("#").strip().upper()
-    if len(clean) == 6:
+    if len(clean) == 6 and all(c in "0123456789ABCDEF" for c in clean):
         try:
             int(clean, 16)
             return clean
@@ -110,11 +120,28 @@ def _sanitize_hex_color(val, fallback):
 def _safe_int(val, default, min_val=None, max_val=None):
     if isinstance(val, bool) or val is None:
         res = default
-    else:
-        try:
-            res = int(float(val)) if isinstance(val, float) else int(val)
-        except (TypeError, ValueError):
+    elif isinstance(val, int):
+        res = val
+    elif isinstance(val, float):
+        if not math.isfinite(val):
             res = default
+        else:
+            res = int(val)
+    elif isinstance(val, str):
+        s = val.strip()
+        if not s:
+            res = default
+        else:
+            try:
+                res = int(s)
+            except ValueError:
+                try:
+                    f = float(s)
+                    res = int(f) if math.isfinite(f) else default
+                except (ValueError, OverflowError):
+                    res = default
+    else:
+        res = default
     if min_val is not None:
         res = max(min_val, res)
     if max_val is not None:
@@ -136,6 +163,8 @@ def normalize_config(raw):
     cfg["manual_brightness"] = _safe_int(raw.get("manual_brightness"), 100, 0, 100)
     cfg["speed"] = _safe_int(raw.get("speed"), 40, 10, 100)
     cfg["force_seq"] = _safe_int(raw.get("force_seq"), 0, 0, 2_000_000_000)
+
+    cfg["save_boot_seq"] = _safe_int(raw.get("save_boot_seq"), 0, 0, 9_223_372_036_854_775_807)
 
     raw_mode = raw.get("mode")
     if isinstance(raw_mode, str) and raw_mode.strip().lower() in VALID_MODES:
@@ -177,11 +206,19 @@ def normalize_config(raw):
         cfg["pre_gmode"] = None
 
     sbs = raw.get("save_boot_status")
-    if isinstance(sbs, dict) and isinstance(sbs.get("ok"), bool):
-        cfg["save_boot_status"] = {
-            "seq": _safe_int(sbs.get("seq"), 0, 0, 2_000_000_000),
-            "ok": sbs["ok"],
-        }
+    if isinstance(sbs, dict):
+        state = str(sbs.get("state", "")).strip().lower()
+        ok_val = sbs.get("ok")
+        if state in ("running", "done") or isinstance(ok_val, bool):
+            if state not in ("running", "done"):
+                state = "done"
+            cfg["save_boot_status"] = {
+                "seq": _safe_int(sbs.get("seq"), 0, 0, 9_223_372_036_854_775_807),
+                "state": state,
+                "ok": bool(ok_val) if isinstance(ok_val, bool) else None,
+            }
+        else:
+            cfg["save_boot_status"] = None
     else:
         cfg["save_boot_status"] = None
 
@@ -199,7 +236,7 @@ def load_config(path=None):
     return normalize_config(raw)
 
 
-def save_config(cfg, path=None):
+def _write_config(cfg, path=None):
     cfg_path = path or CONFIG_PATH
     cfg_dir = os.path.dirname(cfg_path)
     os.makedirs(cfg_dir, exist_ok=True)
@@ -207,6 +244,23 @@ def save_config(cfg, path=None):
     with open(tmp_path, "w", encoding="utf-8") as f:
         json.dump(cfg, f, indent=2)
     os.replace(tmp_path, cfg_path)
+
+
+@contextlib.contextmanager
+def config_lock(path):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path + ".lock", "a", encoding="utf-8") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
+
+
+def save_config(cfg, path=None):
+    cfg_path = path or CONFIG_PATH
+    with config_lock(cfg_path):
+        _write_config(cfg, cfg_path)
 
 
 def parse_hex_rgb(hex_str, power_cap=True):
@@ -514,46 +568,118 @@ def open_netlink_uevent_socket():
     return sock
 
 
-def open_inotify_watches(backlight_dir, config_dir=None):
+def open_inotify_watches(backlight_dir, config_dir=None, return_meta=False):
     cfg_dir = config_dir or CONFIG_DIR
     os.makedirs(cfg_dir, exist_ok=True)
-    if not os.path.exists(CONFIG_PATH):
+    cfg_path = os.path.join(cfg_dir, "config.json")
+    if not os.path.exists(cfg_path):
         try:
-            save_config(DEFAULT_CONFIG)
+            save_config(DEFAULT_CONFIG, path=cfg_path)
         except OSError:
             pass
+    meta = {
+        "backlight_dir": backlight_dir,
+        "backlight_wds": [],
+        "config_wd": -1,
+        "backlight_ok": False,
+        "config_ok": False,
+    }
     try:
         libc_name = ctypes.util.find_library("c") or "libc.so.6"
         libc = ctypes.CDLL(libc_name, use_errno=True)
         ifd = libc.inotify_init1(IN_NONBLOCK | IN_CLOEXEC)
         if ifd < 0:
-            return -1
+            return (-1, meta) if return_meta else -1
+
         if backlight_dir and os.path.isdir(backlight_dir):
+            bl_mask = (
+                IN_MODIFY
+                | IN_CLOSE_WRITE
+                | IN_ATTRIB
+                | IN_DELETE_SELF
+                | IN_MOVE_SELF
+            )
             for fname in ("brightness", "actual_brightness", "bl_power"):
-                fpath = os.path.join(backlight_dir, fname).encode("utf-8")
-                libc.inotify_add_watch(ifd, fpath, IN_MODIFY | IN_CLOSE_WRITE | IN_ATTRIB)
-        libc.inotify_add_watch(
+                fpath = os.path.join(backlight_dir, fname)
+                if not os.path.exists(fpath):
+                    continue
+                wd = libc.inotify_add_watch(ifd, fpath.encode("utf-8"), bl_mask)
+                if wd >= 0:
+                    meta["backlight_wds"].append(wd)
+            dir_wd = libc.inotify_add_watch(
+                ifd,
+                backlight_dir.encode("utf-8"),
+                IN_CREATE | IN_DELETE | IN_DELETE_SELF | IN_MOVE_SELF,
+            )
+            if dir_wd >= 0:
+                meta["backlight_wds"].append(dir_wd)
+            meta["backlight_ok"] = len(meta["backlight_wds"]) > 0
+
+        cfg_wd = libc.inotify_add_watch(
             ifd, cfg_dir.encode("utf-8"), IN_CLOSE_WRITE | IN_MOVED_TO | IN_CREATE
         )
-        return ifd
+        if cfg_wd >= 0:
+            meta["config_wd"] = cfg_wd
+            meta["config_ok"] = True
+        else:
+            try:
+                os.close(ifd)
+            except OSError:
+                pass
+            return (-1, meta) if return_meta else -1
+
+        if backlight_dir and not meta["backlight_ok"]:
+            print(f"Warning: no backlight watches registered for {backlight_dir}", file=sys.stderr, flush=True)
+        return (ifd, meta) if return_meta else ifd
     except Exception:
-        return -1
+        return (-1, meta) if return_meta else -1
 
 
-def rebuild_inotify_watches(old_ifd, backlight_dir, config_dir=None):
+def rebuild_inotify_watches(old_ifd, backlight_dir, config_dir=None, return_meta=False):
     if old_ifd >= 0:
         try:
             os.close(old_ifd)
         except OSError:
             pass
-    return open_inotify_watches(backlight_dir, config_dir=config_dir)
+    return open_inotify_watches(
+        backlight_dir, config_dir=config_dir, return_meta=return_meta
+    )
+
+
+def parse_inotify_events(raw_bytes):
+    """
+    Parses raw inotify_event structs and returns (events_list, watch_invalidated_bool).
+    Each entry in events_list is (wd, mask, name).
+    watch_invalidated_bool is True if any watch emitted IN_IGNORED, IN_DELETE_SELF,
+    IN_MOVE_SELF, or IN_UNMOUNT.
+    """
+    events = []
+    invalidated = False
+    offset = 0
+    hdr_size = INOTIFY_EVENT_HDR.size
+    total = len(raw_bytes)
+    inv_mask = IN_IGNORED | IN_DELETE_SELF | IN_MOVE_SELF | IN_UNMOUNT
+    while offset + hdr_size <= total:
+        wd, mask, _cookie, name_len = INOTIFY_EVENT_HDR.unpack_from(raw_bytes, offset)
+        offset += hdr_size
+        name_bytes = raw_bytes[offset : offset + name_len]
+        offset += name_len
+        name = name_bytes.rstrip(b"\x00").decode("utf-8", errors="ignore")
+        events.append((wd, mask, name))
+        if mask & inv_mask:
+            invalidated = True
+    return events, invalidated
 
 
 def parse_relevant_uevent(raw_bytes):
-    """Returns 'backlight', 'hidraw', or None from a kernel uevent datagram."""
+    """Returns 'backlight_rebind', 'backlight', 'hidraw', or None from a kernel uevent datagram."""
     text = raw_bytes.decode("utf-8", errors="ignore")
+    is_rebind_action = any(
+        act in text
+        for act in ("ACTION=add", "ACTION=remove", "ACTION=bind", "ACTION=unbind")
+    )
     if "SUBSYSTEM=backlight" in text or "SUBSYSTEM=drm" in text:
-        return "backlight"
+        return "backlight_rebind" if is_rebind_action else "backlight"
     if "SUBSYSTEM=hidraw" in text:
         return "hidraw"
     return None
@@ -583,6 +709,147 @@ def make_state_signature(cfg, eff_level):
     )
 
 
+def update_config_preserving_concurrent_edits(mutator_fn, path=None):
+    """
+    Re-reads the latest on-disk config immediately before saving, applies
+    `mutator_fn(latest_cfg)` in-place, and atomically writes `latest_cfg` back.
+    Prevents a long-running operation (such as a 5+ second boot EEPROM write)
+    from overwriting user changes made while the hardware write was in progress.
+    """
+    cfg_path = path or CONFIG_PATH
+    with config_lock(cfg_path):
+        latest = load_config(cfg_path)
+        mutator_fn(latest)
+        _write_config(latest, cfg_path)
+    return latest
+
+
+def process_daemon_sync_step(
+    state,
+    pending_rebind=False,
+    pending_bl_rebind=False,
+    backlight_root=None,
+    hidraw_root=None,
+    config_dir=None,
+    config_path=None,
+    apply_hw_fn=None,
+):
+    """
+    Executes a single consolidated daemon debounce step on `state` dict:
+      - state keys: backlight_dir, hidraw_path, zone_ids, current_auto_zone,
+                    last_sig, ifd, inotify_meta, sock
+    Handles hidraw rebinding, backlight path re-resolution, inotify watch
+    reconstruction (even when the recreated backlight uses the exact same path),
+    concurrent-safe save_boot_status reporting, and hardware sync.
+    """
+    hw_apply = apply_hw_fn or apply_zone_to_hardware
+    cfg_dir = config_dir or CONFIG_DIR
+    cfg_file = config_path or os.path.join(cfg_dir, "config.json")
+
+    if pending_rebind or not state.get("hidraw_path"):
+        state["hidraw_path"] = resolve_hidraw_dev(hidraw_root)
+        state["zone_ids"] = None
+        state["last_sig"] = None
+
+    old_bl = state.get("backlight_dir")
+    resolved_bl = resolve_backlight_dir(backlight_root)
+    bl_missing = bool(old_bl and not os.path.isdir(old_bl))
+    meta = state.get("inotify_meta") or {}
+    bl_watch_missing = bool(resolved_bl and not meta.get("backlight_ok", False))
+
+    if (
+        pending_bl_rebind
+        or bl_missing
+        or resolved_bl != old_bl
+        or bl_watch_missing
+        or state.get("ifd", -1) < 0
+    ):
+        state["backlight_dir"] = resolved_bl
+        new_ifd, new_meta = rebuild_inotify_watches(
+            state.get("ifd", -1),
+            state["backlight_dir"],
+            config_dir=cfg_dir,
+            return_meta=True,
+        )
+        state["ifd"] = new_ifd
+        state["inotify_meta"] = new_meta
+        sock = state.get("sock")
+        state["watch_fds"] = ([sock] if sock is not None else []) + (
+            [new_ifd] if new_ifd >= 0 else []
+        )
+
+    cfg = load_config(cfg_file)
+    perc, screen_on = read_screen_state(state["backlight_dir"])
+    eff_level, state["current_auto_zone"] = compute_effective_state(
+        cfg, perc, screen_on, state.get("current_auto_zone", -1)
+    )
+
+    if cfg.get("save_boot"):
+        req_seq = int(cfg.get("save_boot_seq", 0)) or int(cfg.get("force_seq", 0))
+        try:
+            update_config_preserving_concurrent_edits(
+                lambda latest: latest.update(
+                    {
+                        "save_boot_status": {
+                            "seq": req_seq,
+                            "state": "running",
+                            "ok": None,
+                        }
+                    }
+                ),
+                path=cfg_file,
+            )
+        except OSError:
+            pass
+
+        boot_ok, state["zone_ids"] = hw_apply(
+            state["hidraw_path"],
+            eff_level,
+            state.get("zone_ids"),
+            config=cfg,
+            save_boot=True,
+        )
+
+        def _finalize_boot_status(latest):
+            # Only clear save_boot if no newer save_boot request arrived meanwhile
+            if (int(latest.get("save_boot_seq", 0)) or int(latest.get("force_seq", 0))) == req_seq:
+                latest["save_boot"] = False
+            latest["save_boot_status"] = {
+                "seq": req_seq,
+                "state": "done",
+                "ok": bool(boot_ok),
+            }
+
+        try:
+            cfg = update_config_preserving_concurrent_edits(
+                _finalize_boot_status, path=cfg_file
+            )
+        except OSError:
+            pass
+        state["last_sig"] = None
+        perc, screen_on = read_screen_state(state["backlight_dir"])
+        eff_level, state["current_auto_zone"] = compute_effective_state(
+            cfg, perc, screen_on, state.get("current_auto_zone", -1)
+        )
+
+    new_sig = make_state_signature(cfg, eff_level)
+    if new_sig != state.get("last_sig"):
+        ok, state["zone_ids"] = hw_apply(
+            state["hidraw_path"],
+            eff_level,
+            state.get("zone_ids"),
+            config=cfg,
+        )
+        if ok:
+            print(
+                f"Sync: Screen {perc}% -> Keyboard {eff_level}% "
+                f"(mode={cfg.get('mode')}, sync={cfg.get('sync_screen')})",
+                flush=True,
+            )
+            state["last_sig"] = new_sig
+    return cfg
+
+
 def run_daemon():
     def handle_sig(_signum, _frame):
         sys.exit(0)
@@ -605,9 +872,21 @@ def run_daemon():
     if ok:
         last_sig = make_state_signature(cfg, eff_level)
 
+    if not ok:
+        print(f"HID unavailable or write failed: {hidraw_path or 'device not found'}; existing permissions are required.", file=sys.stderr, flush=True)
     sock = open_netlink_uevent_socket()
-    ifd = open_inotify_watches(backlight_dir)
-    watch_fds = [sock] + ([ifd] if ifd >= 0 else [])
+    ifd, inotify_meta = open_inotify_watches(backlight_dir, return_meta=True)
+    state = {
+        "backlight_dir": backlight_dir,
+        "hidraw_path": hidraw_path,
+        "zone_ids": zone_ids,
+        "current_auto_zone": current_auto_zone,
+        "last_sig": last_sig,
+        "ifd": ifd,
+        "inotify_meta": inotify_meta,
+        "sock": sock,
+        "watch_fds": [sock] + ([ifd] if ifd >= 0 else []),
+    }
 
     print(
         f"Dell G15 Ambient Sync started (Direct HID: {hidraw_path or 'waiting'}, "
@@ -615,13 +894,18 @@ def run_daemon():
         flush=True,
     )
 
-    pending_sync = False
+    pending_sync = bool(cfg.get("save_boot"))
     pending_rebind = False
+    pending_bl_rebind = False
 
     try:
         while True:
-            timeout = DEBOUNCE_SEC if (pending_sync or pending_rebind) else None
-            readable, _, _ = select.select(watch_fds, [], [], timeout)
+            timeout = (
+                DEBOUNCE_SEC
+                if (pending_sync or pending_rebind or pending_bl_rebind)
+                else None
+            )
+            readable, _, _ = select.select(state["watch_fds"], [], [], timeout)
 
             if readable:
                 for rfd in readable:
@@ -632,78 +916,41 @@ def run_daemon():
                             except BlockingIOError:
                                 break
                             kind = parse_relevant_uevent(datagram)
-                            if kind == "backlight":
+                            if kind == "backlight_rebind":
+                                pending_bl_rebind = True
+                                pending_sync = True
+                            elif kind == "backlight":
                                 pending_sync = True
                             elif kind == "hidraw":
                                 pending_rebind = True
                                 pending_sync = True
-                    elif rfd == ifd:
+                    elif rfd == state["ifd"]:
                         try:
-                            os.read(ifd, 4096)
+                            raw_ev = os.read(state["ifd"], 4096)
+                            _ev_list, invalidated = parse_inotify_events(raw_ev)
+                            if invalidated:
+                                pending_bl_rebind = True
                         except OSError:
-                            pass
+                            pending_bl_rebind = True
                         pending_sync = True
                 continue
 
-            # Debounce window elapsed: execute single consolidated hardware update
-            if pending_rebind or not hidraw_path:
-                hidraw_path = resolve_hidraw_dev()
-                zone_ids = None
-                last_sig = None
-                pending_rebind = False
-
-            if pending_sync:
-                new_bl_dir = (
-                    backlight_dir
-                    if (backlight_dir and os.path.isdir(backlight_dir))
-                    else resolve_backlight_dir()
+            if pending_sync or pending_rebind or pending_bl_rebind:
+                process_daemon_sync_step(
+                    state,
+                    pending_rebind=pending_rebind,
+                    pending_bl_rebind=pending_bl_rebind,
                 )
-                if new_bl_dir != backlight_dir:
-                    backlight_dir = new_bl_dir
-                    ifd = rebuild_inotify_watches(ifd, backlight_dir)
-                    watch_fds = [sock] + ([ifd] if ifd >= 0 else [])
-
-                cfg = load_config()
-                perc, screen_on = read_screen_state(backlight_dir)
-                eff_level, current_auto_zone = compute_effective_state(
-                    cfg, perc, screen_on, current_auto_zone
-                )
-
-                if cfg.get("save_boot"):
-                    boot_ok, zone_ids = apply_zone_to_hardware(
-                        hidraw_path, eff_level, zone_ids, config=cfg, save_boot=True
-                    )
-                    cfg["save_boot"] = False
-                    cfg["save_boot_status"] = {
-                        "seq": int(cfg.get("force_seq", 0)),
-                        "ok": bool(boot_ok),
-                    }
-                    try:
-                        save_config(cfg)
-                    except OSError:
-                        pass
-                    last_sig = None
-
-                new_sig = make_state_signature(cfg, eff_level)
-                if new_sig != last_sig:
-                    ok, zone_ids = apply_zone_to_hardware(
-                        hidraw_path, eff_level, zone_ids, config=cfg
-                    )
-                    if ok:
-                        print(
-                            f"Sync: Screen {perc}% -> Keyboard {eff_level}% "
-                            f"(mode={cfg.get('mode')}, sync={cfg.get('sync_screen')})",
-                            flush=True,
-                        )
-                        last_sig = new_sig
                 pending_sync = False
+                pending_rebind = False
+                pending_bl_rebind = False
     except SystemExit:
         pass
     finally:
         sock.close()
-        if ifd >= 0:
+        if state.get("ifd", -1) >= 0:
             try:
-                os.close(ifd)
+                os.close(state["ifd"])
             except OSError:
                 pass
 

@@ -1,130 +1,84 @@
 #!/bin/bash
-set -e
-# Dell G15 Ambient Sync & Control Center Installer (Direct HID + Netlink + Tray GUI)
-# Compatible with Ubuntu/Debian and Fedora Workstation/Kinoite (Atomic)
-
+set -euo pipefail
+export PYTHONDONTWRITEBYTECODE=1
+# User-only installation on mutable and immutable systems. Never installs dependencies.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
-LANG_CODE="${LANG%%_*}"
-if [ "$LANG_CODE" == "pt" ]; then
-    MSG_START="--- Dell G15 Ambient Sync & Control Center Instalador ---"
-    MSG_CHECK="-> Verificando Python 3 e dependências gráficas (PyGObject / GTK4 / Libadwaita)..."
-    MSG_ERROR="Erro: python3 não está instalado."
-    MSG_GI_ERROR="Erro: PyGObject, GTK 4.0 ou Libadwaita 1 não foram encontrados.\n   No Ubuntu/Debian instale: sudo apt install python3-gi gir1.2-gtk-4.0 gir1.2-adw-1\n   No Fedora instale: sudo dnf install python3-gobject gtk4 libadwaita"
-    MSG_CLEAN="-> Limpando versões e serviços antigos (migração limpa)..."
-    MSG_SCRIPTS="-> Binários e ícones instalados em ~/.local/"
-    MSG_SERVICE="-> Serviços Systemd e atalho de aplicativo configurados"
-    MSG_UDEV="-> Atualizando regras udev para acesso direto ao controlador HID (requer sudo)..."
-    MSG_DONE="--------------------------------------\nInstalação concluída! O daemon e o ícone na barra superior estão ativos."
+DAEMON_ONLY=0
+case "${1:-}" in
+    --daemon-only) DAEMON_ONLY=1 ;;
+    "") ;;
+    *) echo "Usage: ./install.sh [--daemon-only]" >&2; exit 2 ;;
+esac
+command -v python3 >/dev/null || { echo "Python 3 unavailable; nothing installed." >&2; exit 1; }
+command -v systemctl >/dev/null || { echo "User systemd unavailable; nothing installed." >&2; exit 1; }
+# All prerequisites are checked before stopping the installed application.
+systemctl --user show-environment >/dev/null
+if [ "$DAEMON_ONLY" = 0 ]; then
+    python3 "$SCRIPT_DIR/bin/g15-tray" --check-dependencies || exit 1
+fi
+for source in g15-daemon g15-tray g15_core.py g15_gtk.py g15_qt.py; do
+    test -r "$SCRIPT_DIR/bin/$source"
+done
+for source in dell-g15-daemon.service dell-g15-tray.service; do
+    test -r "$SCRIPT_DIR/systemd/$source"
+done
+test -r "$SCRIPT_DIR/assets/logo.svg"
+python3 - "$SCRIPT_DIR" <<'PY'
+import pathlib, sys
+root = pathlib.Path(sys.argv[1])
+for name in ('g15-daemon', 'g15-tray', 'g15_core.py', 'g15_gtk.py', 'g15_qt.py'):
+    compile((root / 'bin' / name).read_bytes(), name, 'exec')
+PY
+CONFIG_ROOT="${XDG_CONFIG_HOME:-$HOME/.config}"
+DATA_ROOT="${XDG_DATA_HOME:-$HOME/.local/share}"
+mkdir -p "$HOME/.local/bin" "$CONFIG_ROOT/systemd/user" "$DATA_ROOT/dell-g15"
+systemctl --user stop dell-g15-daemon.service dell-g15-tray.service 2>/dev/null || true
+for source in g15-daemon g15-tray g15_core.py g15_gtk.py g15_qt.py; do
+    cp "$SCRIPT_DIR/bin/$source" "$HOME/.local/bin/$source"
+done
+chmod 755 "$HOME/.local/bin/g15-daemon" "$HOME/.local/bin/g15-tray"
+chmod 644 "$HOME/.local/bin/g15_core.py" "$HOME/.local/bin/g15_gtk.py" "$HOME/.local/bin/g15_qt.py"
+cp "$SCRIPT_DIR/assets/"* "$DATA_ROOT/dell-g15/"
+cp "$SCRIPT_DIR/systemd/dell-g15-daemon.service" "$CONFIG_ROOT/systemd/user/"
+if [ "$DAEMON_ONLY" = 0 ]; then
+    cp "$SCRIPT_DIR/systemd/dell-g15-tray.service" "$CONFIG_ROOT/systemd/user/"
+    mkdir -p "$DATA_ROOT/applications"
+    python3 - "$DATA_ROOT" "$HOME" <<'PY'
+import pathlib, sys
+root, home = map(pathlib.Path, sys.argv[1:])
+# Escape desktop-entry reserved characters, including paths containing spaces.
+def quoted(value):
+    return '"' + str(value).replace('\\', '\\\\').replace('"', '\\"').replace('`', '\\`').replace('$', '\\$').replace('%', '%%') + '"'
+(root / 'applications/io.github.murilogiatti.DellG15Control.desktop').write_text(
+    '[Desktop Entry]\nName=Dell G15 Control Center\nType=Application\nTerminal=false\n'
+    + 'Exec=' + quoted(home / '.local/bin/g15-tray') + ' --show\n'
+    + 'Icon=' + str(root / 'dell-g15/logo.svg') + '\nCategories=Settings;HardwareSettings;\n')
+PY
 else
-    MSG_START="--- Dell G15 Ambient Sync & Control Center Installer ---"
-    MSG_CHECK="-> Checking Python 3 and GUI dependencies (PyGObject / GTK4 / Libadwaita)..."
-    MSG_ERROR="Error: python3 is not installed."
-    MSG_GI_ERROR="Error: PyGObject, GTK 4.0 or Libadwaita 1 not found.\n   On Ubuntu/Debian run: sudo apt install python3-gi gir1.2-gtk-4.0 gir1.2-adw-1\n   On Fedora run: sudo dnf install python3-gobject gtk4 libadwaita"
-    MSG_CLEAN="-> Cleaning up legacy files and services (clean migration)..."
-    MSG_SCRIPTS="-> Binaries and icons installed in ~/.local/"
-    MSG_SERVICE="-> Systemd user services and desktop shortcut configured"
-    MSG_UDEV="-> Updating udev rules for direct HID controller access (requires sudo)..."
-    MSG_DONE="--------------------------------------\nInstallation complete! Daemon and top-bar tray indicator are now active."
+    systemctl --user disable dell-g15-tray.service 2>/dev/null || true
+    rm -f "$CONFIG_ROOT/systemd/user/dell-g15-tray.service"
+    rm -f "$DATA_ROOT/applications/io.github.murilogiatti.DellG15Control.desktop"
 fi
-
-echo -e "$MSG_START"
-
-# 1. Check Python 3 + PyGObject / GTK 4.0 / Adw 1 before stopping services or copying files
-echo "$MSG_CHECK"
-if ! command -v python3 &> /dev/null; then
-    echo "$MSG_ERROR"
-    exit 1
-fi
-if [ "${SKIP_GUI_CHECK:-0}" != "1" ]; then
-    if ! python3 -c 'import gi; gi.require_version("Gtk", "4.0"); gi.require_version("Adw", "1"); from gi.repository import Gtk, Adw, Gio, GLib' &> /dev/null; then
-        echo -e "$MSG_GI_ERROR"
-        exit 1
-    fi
-fi
-
-# 2. Clean migration from any legacy version (v1-v5)
-echo "$MSG_CLEAN"
-systemctl --user stop dell-g15-daemon.service 2>/dev/null || true
-systemctl --user stop dell-g15-tray.service 2>/dev/null || true
-systemctl --user stop dell-g15-update.timer 2>/dev/null || true
-systemctl --user disable dell-g15-update.timer 2>/dev/null || true
-systemctl --user stop dell-g15-update.service 2>/dev/null || true
-systemctl --user disable dell-g15-update.service 2>/dev/null || true
-
-rm -f "$HOME/.config/systemd/user/dell-g15-update.timer"
-rm -f "$HOME/.config/systemd/user/dell-g15-update.service"
-rm -f "$HOME/.config/systemd/user/default.target.wants/dell-g15-tray.service"
-rm -f "$HOME/.local/bin/g15-daemon.sh"
-rm -f "$HOME/.local/bin/g15-cycle.sh"
-rm -f "$HOME/.local/bin/g15-update.sh"
-
-# 3. Install direct-HID daemon, tray indicator, and visual assets/icons
-mkdir -p "$HOME/.local/bin"
-cp "$SCRIPT_DIR/bin/g15-daemon" "$HOME/.local/bin/g15-daemon"
-cp "$SCRIPT_DIR/bin/g15-tray" "$HOME/.local/bin/g15-tray"
-chmod +x "$HOME/.local/bin/g15-daemon" "$HOME/.local/bin/g15-tray"
-
-mkdir -p "$HOME/.local/share/dell-g15"
-cp "$SCRIPT_DIR/assets/"* "$HOME/.local/share/dell-g15/"
-
-COMMIT_SHA=$(git -C "$SCRIPT_DIR" rev-parse HEAD 2>/dev/null || echo "unknown")
-cat > "$HOME/.local/share/dell-g15/version.json" <<EOF
-{
-  "commit": "$COMMIT_SHA",
-  "repo_dir": "$SCRIPT_DIR"
-}
-EOF
-
-mkdir -p "$HOME/.local/share/icons/hicolor/scalable/apps"
-mkdir -p "$HOME/.local/share/icons/hicolor/256x256/apps"
-mkdir -p "$HOME/.local/share/icons/hicolor/scalable/status"
-mkdir -p "$HOME/.local/share/icons/hicolor/64x64/status"
-cp "$SCRIPT_DIR/assets/logo.svg" "$HOME/.local/share/icons/hicolor/scalable/apps/io.github.murilogiatti.DellG15Control.svg"
-cp "$SCRIPT_DIR/assets/logo.png" "$HOME/.local/share/icons/hicolor/256x256/apps/io.github.murilogiatti.DellG15Control.png"
-cp "$SCRIPT_DIR/assets/logo.svg" "$HOME/.local/share/icons/hicolor/scalable/apps/dell-g15-control.svg"
-cp "$SCRIPT_DIR/assets/logo.png" "$HOME/.local/share/icons/hicolor/256x256/apps/dell-g15-control.png"
-cp "$SCRIPT_DIR/assets/tray-icon.svg" "$HOME/.local/share/icons/hicolor/scalable/status/tray-icon.svg"
-cp "$SCRIPT_DIR/assets/tray-icon.png" "$HOME/.local/share/icons/hicolor/64x64/status/tray-icon.png"
-gtk-update-icon-cache -f -t "$HOME/.local/share/icons/hicolor" 2>/dev/null || true
-echo "$MSG_SCRIPTS"
-
-# 4. Install Systemd User Services & Desktop Launcher
-mkdir -p "$HOME/.config/systemd/user/"
-cp "$SCRIPT_DIR/systemd/dell-g15-daemon.service" "$HOME/.config/systemd/user/dell-g15-daemon.service"
-cp "$SCRIPT_DIR/systemd/dell-g15-tray.service" "$HOME/.config/systemd/user/dell-g15-tray.service"
-
-mkdir -p "$HOME/.local/share/applications"
-rm -f "$HOME/.local/share/applications/dell-g15-control.desktop"
-cat > "$HOME/.local/share/applications/io.github.murilogiatti.DellG15Control.desktop" <<EOF
-[Desktop Entry]
-Name=Dell G15 Control Center
-Comment=Configure Dell G15 4-Zone RGB, Ambient Sync, Effects and Power Profiles
-Comment[pt]=Configurar Zonas RGB, Brilho Automático, Efeitos e Energia do Dell G15
-Exec=$HOME/.local/bin/g15-tray --show
-Icon=$HOME/.local/share/icons/hicolor/scalable/apps/io.github.murilogiatti.DellG15Control.svg
-StartupWMClass=io.github.murilogiatti.DellG15Control
-Terminal=false
-Type=Application
-Categories=Settings;HardwareSettings;GTK;
-Keywords=Dell;G15;Alienware;RGB;Keyboard;Backlight;
-EOF
-update-desktop-database "$HOME/.local/share/applications" 2>/dev/null || true
-echo "$MSG_SERVICE"
-
-# 5. Udev Rules (Works on both standard Linux and immutable Fedora Kinoite /etc)
-if ! cmp -s "$SCRIPT_DIR/udev/10-alienware.rules" "/etc/udev/rules.d/10-alienware.rules"; then
-    if [ -t 0 ] || sudo -n true 2>/dev/null; then
-        echo "$MSG_UDEV"
-        sudo cp "$SCRIPT_DIR/udev/10-alienware.rules" /etc/udev/rules.d/10-alienware.rules
-        sudo udevadm control --reload-rules
-        sudo udevadm trigger --subsystem-match=hidraw --subsystem-match=usb --subsystem-match=input
-    fi
-fi
-
-# 6. Reload and start services
+python3 - "$SCRIPT_DIR" "$DATA_ROOT/dell-g15/version.json" <<'PY'
+import json, pathlib, subprocess, sys
+root, output = sys.argv[1:]
+try:
+    sha = subprocess.check_output(['git', '-C', root, 'rev-parse', 'HEAD'], stderr=subprocess.DEVNULL).decode().strip()
+    if subprocess.check_output(['git', '-C', root, 'status', '--porcelain']):
+        sha = 'unknown'  # Local edits must never masquerade as a published commit.
+except (OSError, subprocess.CalledProcessError):
+    sha = 'unknown'
+pathlib.Path(output).write_text(json.dumps({'commit': sha, 'repo_dir': root}, indent=2) + '\n')
+PY
 systemctl --user daemon-reload
-systemctl --user enable dell-g15-daemon.service dell-g15-tray.service
-systemctl --user restart dell-g15-daemon.service dell-g15-tray.service
-
-echo -e "$MSG_DONE"
+systemctl --user enable dell-g15-daemon.service
+systemctl --user restart dell-g15-daemon.service
+systemctl --user is-active --quiet dell-g15-daemon.service
+if [ "$DAEMON_ONLY" = 0 ]; then
+    systemctl --user enable dell-g15-tray.service
+    systemctl --user restart dell-g15-tray.service
+    systemctl --user is-active --quiet dell-g15-tray.service
+fi
+python3 "$SCRIPT_DIR/bin/g15-tray" --diagnose
+echo "User files installed. No system packages or permissions were changed."
+echo "HID/evdev access and optional features depend on existing system permissions and components."

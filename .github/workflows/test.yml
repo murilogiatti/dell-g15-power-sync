@@ -24,7 +24,21 @@ jobs:
         run: shellcheck install.sh uninstall.sh
 
       - name: Check Python syntax
-        run: python3 -m py_compile bin/g15-daemon bin/g15-tray
+        run: python3 -m py_compile bin/g15-daemon bin/g15-tray bin/g15_core.py bin/g15_gtk.py bin/g15_qt.py
 
       - name: Run Python Unit Tests
         run: python3 -m unittest discover -s tests -p "test_*.py" -v
+
+  qt-qml:
+    runs-on: ubuntu-latest
+    container: fedora:latest
+    steps:
+      - name: Prepare disposable Qt test runner (not the user's system)
+        run: dnf install -y git python3 python3-pyqt6 kf6-kirigami qt6-qtdeclarative qt6-qtquickcontrols2
+      - uses: actions/checkout@v5
+      - name: Qt/QML smoke and core regressions
+        env:
+          QT_QPA_PLATFORM: offscreen
+          QT_QUICK_BACKEND: software
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: python3 -m unittest discover -s tests -p 'test_regressions.py' -v

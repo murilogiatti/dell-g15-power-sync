@@ -4,14 +4,21 @@
 import importlib.machinery
 import importlib.util
 import os
+import subprocess
+import sys
 import tempfile
 import unittest
+from unittest import mock
+
+BIN_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "bin"))
+if BIN_DIR not in sys.path:
+    sys.path.insert(0, BIN_DIR)
+
+import g15_core  # noqa: E402
 
 
 def load_daemon_module():
-    daemon_path = os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "..", "bin", "g15-daemon")
-    )
+    daemon_path = os.path.join(BIN_DIR, "g15-daemon")
     loader = importlib.machinery.SourceFileLoader("g15_daemon", daemon_path)
     spec = importlib.util.spec_from_loader("g15_daemon", loader)
     module = importlib.util.module_from_spec(spec)
@@ -20,9 +27,7 @@ def load_daemon_module():
 
 
 def load_tray_module():
-    tray_path = os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "..", "bin", "g15-tray")
-    )
+    tray_path = os.path.join(BIN_DIR, "g15-tray")
     loader = importlib.machinery.SourceFileLoader("g15_tray", tray_path)
     spec = importlib.util.spec_from_loader("g15_tray", loader)
     module = importlib.util.module_from_spec(spec)
@@ -38,6 +43,14 @@ class TestDellG15Daemon(unittest.TestCase):
     def setUp(self):
         self.tmpdir = tempfile.TemporaryDirectory()
         self.root = self.tmpdir.name
+        self.addCleanup(self.tmpdir.cleanup)
+        for module in (g15_core, g15):
+            for attr, value in (("CONFIG_DIR", self.root), ("CONFIG_PATH", os.path.join(self.root, "config.json")),
+                                ("DATA_DIR", self.root), ("VERSION_FILE", os.path.join(self.root, "version.json"))):
+                if hasattr(module, attr):
+                    patcher = mock.patch.object(module, attr, value)
+                    patcher.start()
+                    self.addCleanup(patcher.stop)
 
     def tearDown(self):
         self.tmpdir.cleanup()
@@ -277,70 +290,183 @@ class TestDellG15Daemon(unittest.TestCase):
                 return b"def broken_syntax(:\n"
             return b"<svg>corrupt</svg>"
 
-        with self.assertRaises(SyntaxError):
+        with self.assertRaises(g15_core.UpdateError):
             g15_tray.stage_and_apply_update(
-                "deadbeef", files_map=files_map, fetcher=fake_fetch_corrupt
+                "d" * 40, files_map=files_map, fetcher=fake_fetch_corrupt
             )
         with open(dest_a, "rb") as f:
             self.assertEqual(f.read(), b"print('new_daemon')\n")
 
     def test_gmode_restores_previous_power_profile_and_reports_failure(self):
-        app = g15_tray.G15ControlApp(start_hidden=True)
-        app.cfg = g15_tray.normalize_config({"zones_rgb": ["00E5FF"] * 4, "mode": "breathing"})
-        notified = []
-        app.send_osd_notification = lambda title, body: notified.append((title, body))
+        cfg = g15_core.normalize_config({"zones_rgb": ["00E5FF"] * 4, "mode": "breathing"})
+        set_calls = []
 
-        orig_get = g15_tray.get_power_profile
-        orig_set = g15_tray.set_power_profile
-        orig_save = g15_tray.save_config
-        try:
-            g15_tray.save_config = lambda _c: None
-            # Case 1: User starts in power-saver, G-Mode succeeds, then disabling restores power-saver
-            g15_tray.get_power_profile = lambda: "power-saver"
-            set_calls = []
-            g15_tray.set_power_profile = lambda p: (set_calls.append(p) or True)
+        # Case 1: User starts in power-saver, G-Mode succeeds, then disabling restores power-saver
+        changed, active_prof, _title, _body = g15_core.apply_g_mode_transition(
+            cfg,
+            target_state=True,
+            get_profile_fn=lambda: "power-saver",
+            set_profile_fn=lambda p: (set_calls.append(p) or True),
+            save_fn=lambda _c: None,
+        )
+        self.assertTrue(changed)
+        self.assertEqual(active_prof, "performance")
+        self.assertEqual(set_calls[-1], "performance")
+        self.assertEqual(cfg["pre_gmode"]["power_profile"], "power-saver")
 
-            app.toggle_g_mode(target_state=True, notify=True)
-            self.assertEqual(set_calls[-1], "performance")
-            self.assertEqual(app.cfg["pre_gmode"]["power_profile"], "power-saver")
+        changed, active_prof, _title, _body = g15_core.apply_g_mode_transition(
+            cfg,
+            target_state=False,
+            get_profile_fn=lambda: "performance",
+            set_profile_fn=lambda p: (set_calls.append(p) or True),
+            save_fn=lambda _c: None,
+        )
+        self.assertTrue(changed)
+        self.assertEqual(active_prof, "power-saver")
+        self.assertEqual(set_calls[-1], "power-saver")
+        self.assertEqual(cfg["mode"], "breathing")
 
-            app.toggle_g_mode(target_state=False, notify=True)
-            self.assertEqual(set_calls[-1], "power-saver")
-            self.assertEqual(app.cfg["mode"], "breathing")
-
-            # Case 2: set_power_profile fails -> notification must NOT claim High Performance succeeded
-            notified.clear()
-            g15_tray.set_power_profile = lambda _p: False
-            app.toggle_g_mode(target_state=True, notify=True)
-            self.assertTrue(
-                "indisponível" in notified[-1][1].lower()
-                or "unavailable" in notified[-1][1].lower()
-            )
-        finally:
-            g15_tray.get_power_profile = orig_get
-            g15_tray.set_power_profile = orig_set
-            g15_tray.save_config = orig_save
+        # Case 2: set_power_profile fails -> notification must NOT claim High Performance succeeded
+        changed, _active_prof, _title, body = g15_core.apply_g_mode_transition(
+            cfg,
+            target_state=True,
+            get_profile_fn=lambda: "balanced",
+            set_profile_fn=lambda _p: False,
+            save_fn=lambda _c: None,
+        )
+        self.assertTrue(changed)
+        self.assertTrue(
+            "indisponível" in body.lower() or "unavailable" in body.lower()
+        )
 
     def test_save_boot_waits_for_daemon_confirmation(self):
-        app = g15_tray.G15ControlApp(start_hidden=True)
-        notified = []
-        app.send_osd_notification = lambda title, body: notified.append((title, body))
-        orig_save = g15_tray.save_config
-        try:
-            g15_tray.save_config = lambda _c: None
-            app._trigger_save_boot()
-            # Immediately after requesting save_boot, no premature success notification is sent
-            self.assertEqual(len(notified), 0)
-            expected_seq = app._pending_boot_seq
-            self.assertGreater(expected_seq, 0)
+        cfg = g15_core.normalize_config({})
+        expected_seq = g15_core.request_boot_save(cfg, save_fn=lambda _c: None)
+        self.assertGreater(expected_seq, 0)
+        self.assertTrue(cfg["save_boot"])
 
-            # Simulate daemon writing save_boot_status={"seq": expected_seq, "ok": False}
-            app.cfg["save_boot_status"] = {"seq": expected_seq, "ok": False}
-            app._check_save_boot_feedback()
-            self.assertEqual(len(notified), 1)
-            self.assertTrue("❌" in notified[-1][0])
-        finally:
-            g15_tray.save_config = orig_save
+        self.assertEqual(g15_core.evaluate_boot_save_feedback(cfg, expected_seq)[0], "pending")
+        for state, ok, expected in (("running", None, "running"), ("done", False, "failed"), ("done", True, "success")):
+            cfg["save_boot_status"] = {"seq": expected_seq, "state": state, "ok": ok}
+            self.assertEqual(g15_core.evaluate_boot_save_feedback(cfg, expected_seq)[0], expected)
+        self.assertEqual(g15_core.evaluate_boot_save_feedback(cfg, expected_seq + 1)[0], "pending")
+
+    def test_desktop_backend_detection_and_composite_xdg_strings(self):
+        self.assertEqual(
+            g15_core.detect_desktop_backend({"XDG_CURRENT_DESKTOP": "ubuntu:GNOME"}),
+            "gtk",
+        )
+        self.assertEqual(
+            g15_core.detect_desktop_backend({"XDG_CURRENT_DESKTOP": "GNOME-Classic:GNOME"}),
+            "gtk",
+        )
+        self.assertEqual(
+            g15_core.detect_desktop_backend({"XDG_CURRENT_DESKTOP": "KDE"}),
+            "qt",
+        )
+        self.assertEqual(
+            g15_core.detect_desktop_backend({"XDG_CURRENT_DESKTOP": "ubuntu:KDE"}),
+            "qt",
+        )
+        self.assertEqual(
+            g15_core.detect_desktop_backend({"DESKTOP_SESSION": "plasma"}),
+            "qt",
+        )
+        self.assertEqual(
+            g15_core.detect_desktop_backend(
+                {"XDG_CURRENT_DESKTOP": "ubuntu:GNOME", "G15_UI_BACKEND": "qt"}
+            ),
+            "qt",
+        )
+
+        # CLI --backend override
+        backend, rest = g15_core.parse_backend_override(
+            ["g15-tray", "--backend", "qt", "--show"],
+            env={"XDG_CURRENT_DESKTOP": "GNOME"},
+        )
+        self.assertEqual(backend, "qt")
+        self.assertEqual(rest, ["g15-tray", "--show"])
+
+        backend2, rest2 = g15_core.parse_backend_override(
+            ["g15-tray", "--backend=gtk", "--toggle-gmode"],
+            env={"XDG_CURRENT_DESKTOP": "KDE"},
+        )
+        self.assertEqual(backend2, "gtk")
+        self.assertEqual(rest2, ["g15-tray", "--toggle-gmode"])
+
+        with self.assertRaises(ValueError):
+            g15_core.parse_backend_override(["g15-tray", "--backend", "wxwidgets"])
+
+    def test_toolkit_isolation_and_no_silent_fallback(self):
+        # 1. Verify g15_core never imports gi, PyQt6, or PySide6
+        code = (
+            "import sys; sys.path.insert(0, %r); import g15_core; "
+            "forbidden = [m for m in ('gi', 'PyQt6', 'PySide6') if m in sys.modules]; "
+            "assert not forbidden, f'Forbidden modules imported in g15_core: {forbidden}'"
+            % BIN_DIR
+        )
+        subprocess.check_call([sys.executable, "-c", code])
+
+        # 2. Verify g15_gtk never imports PyQt6 or PySide6 when loaded
+        code_gtk = (
+            "import sys; sys.path.insert(0, %r); import g15_gtk; "
+            "assert 'gi' in sys.modules; "
+            "forbidden = [m for m in ('PyQt6', 'PySide6') if m in sys.modules]; "
+            "assert not forbidden, f'Qt imported inside GTK backend: {forbidden}'"
+            % BIN_DIR
+        )
+        probe = subprocess.run([sys.executable, "-c", "import gi; gi.require_version('Gtk','4.0'); gi.require_version('Adw','1')"], capture_output=True)
+        if probe.returncode == 0:
+            subprocess.check_call([sys.executable, "-c", code_gtk])
+
+        # 3. Verify that if a requested backend's toolkit is missing, load_ui_backend raises RuntimeError
+        # with distribution-specific install instructions and NEVER imports the other toolkit
+        code_missing_qt = "\n".join(
+            [
+                "import builtins, sys, importlib.machinery, importlib.util",
+                f"sys.path.insert(0, {BIN_DIR!r})",
+                "real_import = builtins.__import__",
+                "def fake_import(name, *a, **kw):",
+                "    if name.startswith('PyQt6'):",
+                "        raise ImportError('No PyQt6')",
+                "    return real_import(name, *a, **kw)",
+                "builtins.__import__ = fake_import",
+                f"loader = importlib.machinery.SourceFileLoader('g15_tray_iso', {os.path.join(BIN_DIR, 'g15-tray')!r})",
+                "spec = importlib.util.spec_from_loader('g15_tray_iso', loader)",
+                "mod = importlib.util.module_from_spec(spec)",
+                "loader.exec_module(mod)",
+                "try:",
+                "    mod.load_ui_backend('qt')",
+                "    raise AssertionError('Expected RuntimeError')",
+                "except RuntimeError as e:",
+                "    msg = str(e)",
+                "    assert 'PyQt6' in msg and 'Kirigami' in msg, msg",
+                "    assert 'gi' not in sys.modules, 'GTK/gi was imported during Qt backend failure!'",
+            ]
+        )
+        subprocess.check_call([sys.executable, "-c", code_missing_qt])
+
+    def test_backlight_cycle_and_brightness_step_shared_logic(self):
+        cfg = g15_core.normalize_config({"sync_screen": True, "manual_brightness": 100})
+        g15_core.apply_backlight_cycle(cfg, save_fn=lambda _c: None)
+        self.assertFalse(cfg["sync_screen"])
+        self.assertEqual(cfg["manual_brightness"], 100)
+
+        g15_core.apply_backlight_cycle(cfg, save_fn=lambda _c: None)
+        self.assertFalse(cfg["sync_screen"])
+        self.assertEqual(cfg["manual_brightness"], 50)
+
+        g15_core.apply_backlight_cycle(cfg, save_fn=lambda _c: None)
+        self.assertFalse(cfg["sync_screen"])
+        self.assertEqual(cfg["manual_brightness"], 0)
+
+        g15_core.apply_backlight_cycle(cfg, save_fn=lambda _c: None)
+        self.assertTrue(cfg["sync_screen"])
+        self.assertEqual(cfg["manual_brightness"], 100)
+
+        val, _t, _b = g15_core.apply_brightness_step(cfg, -1, save_fn=lambda _c: None)
+        self.assertFalse(cfg["sync_screen"])
+        self.assertEqual(val, 75)
 
 
 if __name__ == "__main__":

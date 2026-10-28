@@ -1,116 +1,93 @@
-<div align="center">
-  <img src="assets/banner.svg" alt="Dell G15 Ambient Sync & Control Center Banner" width="100%"/>
-  <br/><br/>
+<div align="center"><img src="assets/banner.svg" alt="Dell G15 Ambient Sync" width="100%"/></div>
 
-  [![CI](https://github.com/murilogiatti/dell-g15-power-sync/actions/workflows/test.yml/badge.svg)](https://github.com/murilogiatti/dell-g15-power-sync/actions/workflows/test.yml)
-  [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-  ![Platform: Linux](https://img.shields.io/badge/Platform-Linux-blue.svg)
+# Dell G15 Ambient Sync & Control Center
 
-  <p>
-    <a href="#english">🇺🇸 English (EN-US)</a> • <a href="#português">🇧🇷 Português (PT-BR)</a>
-  </p>
-</div>
+[Português](#português) · [English](#english)
 
----
+## Português
 
-<h2 id="english">🇺🇸 English (EN-US)</h2>
+Controla a iluminação de controladores Alienware AW-ELC USB `187c:0550` / `187c:0551` no Linux. O daemon usa somente a biblioteca padrão do Python 3. O launcher escolhe GTK4/Libadwaita no GNOME e PyQt6/QtQuick/Kirigami no KDE Plasma, importando somente o toolkit escolhido.
 
-### Overview
-<img src="assets/logo.svg" alt="Dell G15 Logo" width="110" align="right"/>
+### Instalação somente no usuário
 
-**Dell G15 Ambient Sync & Control Center** combines an ultra-lightweight, event-driven hardware daemon (`g15-daemon`) with a native **Top-Bar System Tray Indicator + GTK4/Libadwaita Control Center** (`g15-tray`).
-
-Built from scratch with a clean **Data-Oriented Design (DOD)** architecture, it eliminates polling loops (`sleep`) in the hardware daemon and avoids heavy third-party CLI tools (`openrgb`):
-- **Direct USB HID Communication (No OpenRGB Required)**: Talks directly to the Alienware AW-ELC controller (`187c:0550` / `187c:0551`) via Linux `/dev/hidraw*` (`HIDIOCSFEATURE` ioctls) using only the Python 3 standard library in `g15-daemon`. Queries the controller's firmware zone table (`0x20 0x02`) and maps known Dell G15 / Alienware AW-ELC platform IDs (`5511`, `5515`, `5520`, `5525`, `5530`, `5535`).
-- **Event-Driven Hardware Daemon (`g15-daemon`)**: Listens directly to Linux kernel `AF_NETLINK` (`NETLINK_KOBJECT_UEVENT`) and `inotify` sysfs/config events (blocking in `select` with zero background polling while idle) and reacts with a **150ms debounce**.
-- **Top-Bar System Tray Widget (`StatusNotifierItem` + `Dbusmenu`)**: Integrates natively with GNOME (AppIndicator) and KDE Plasma (requires system `PyGObject`, `GTK 4.0`, and `Libadwaita 1`, updating sensor telemetry every 3 seconds):
-  - **Mouse-Wheel Brightness Scroll**: Scroll up/down directly over the top-bar keyboard icon to step keyboard intensity (`0%`, `10%`, `30%`, `50%`, `75%`, `100%`).
-  - **Instant Menu Actions**: Toggle *Ambient Sync*, set fixed brightness, toggle **G-Mode / Game Shift (`Fn+F9`)**, switch between 12 RGB color presets, select onboard hardware animations, switch thermal/power profiles (`power-saver`, `balanced`, `performance`), and view live `CPU`/`GPU` temperatures + fan RPM.
-- **Native Hardware Hotkeys (`Fn+F5` & `Fn+F9`) + OSD Notifications**:
-  - **`Fn+F9` (G-Mode / Game Shift)**: Requests the `performance` thermal profile via `power-profiles-daemon`, switches the keyboard to **Pure Red (`#FF0000`)** while keeping your configured brightness/Ambient Sync intact, restores your previous color/effect and power profile when turned off, and displays a native desktop notification (GNOME / KDE Plasma).
-  - **`Fn+F5` (Smart Backlight Cycle)**: Intercepts the keyboard backlight key to cycle cleanly through **`🔄 Ambient Sync (Auto)` ➔ `🔆 100% Fixed` ➔ `🔅 50% Fixed` ➔ `🌑 Off (0%)`** with on-screen OSD notifications.
-- **GTK4 + Libadwaita Control Center (`g15-tray --show`)**:
-  - **Automatic Light / Dark Theme Sync**: Dynamically follows the GNOME/Ubuntu and KDE Plasma light/dark theme selector in real time via XDG Desktop Portal and GSettings.
-  - **Dynamic Whole-Keyboard or 4-Zone RGB View**: Switch seamlessly between a single unified color picker for the entire keyboard or 4 independent zone pickers (`Zone 1 WASD`, `Zone 2 Center-Left`, `Zone 3 Center-Right`, `Zone 4 NumPad`), plus a labeled 12-color quick-preset grid (`Pure White`, `Ice Blue`, `Alienware Cyan`, `Cobalt Blue`, `Turquoise`, `Matrix Green`, `Solar Gold`, `Warm Amber`, `Orange`, `G15 Red`, `Magenta`, `Neon Purple`).
-  - **Onboard Hardware Effects**: Trigger native AW-ELC microcontroller animations (`Static`, `Breathing`, `Pulse`, `Two-Color Morph`, `Spectrum Cycle`, `Rainbow Wave`) executed by the keyboard controller itself, with a calibrated `10%–100%` speed slider (supporting mouse-wheel ±5% steps).
-  - **Onboard Keyboard Memory (Boot Persistence)**: Save your favorite lighting profile directly to the keyboard microcontroller's internal user slot (`0x0061`) with hardware write verification from `g15-daemon`.
-  - **Built-in Atomic 1-Click Updater**: Checks GitHub (`main`) for new versions in the background and stages/validates all files from the target commit SHA with automatic rollback before replacing local files.
-- **Ready for Standard & Immutable Distros**: Works on **Ubuntu / Debian** and **Fedora Workstation / Kinoite / Silverblue (Atomic)** using standard system packages (`python3`, `python3-gi`/`python3-gobject`, `gtk4`, `libadwaita`) without `pip` packages.
-
-### ✨ Smart 5-Tier Ambient Sync + Hysteresis (±2%)
-When **Ambient Sync** is enabled, your chosen RGB colors scale proportionally with screen brightness (`amdgpu_bl*`) using a ±2% deadband to prevent boundary flicker:
-- 🌑 **Screen Off (`bl_power != 0`)** ➔ **0% Keyboard** *(Hardware Dimmer `0x26` at 100% — LEDs off when backlight driver reports power-down)*
-- 🌙 **0–20% Screen** ➔ **10% Keyboard** *(Safe minimum floor while screen is active)*
-- 🌘 **21–40% Screen** ➔ **30% Keyboard**
-- 🌗 **41–60% Screen** ➔ **50% Keyboard**
-- 🌔 **61–80% Screen** ➔ **75% Keyboard**
-- 🌕 **81–100% Screen** ➔ **100% Keyboard** *(Capped at `230` / `#E6E6E6` by default to prevent hardware power-limiter drops)*
-
-### 🚀 Installation & Upgrade
-The installer automatically cleans up any legacy services or scripts from older versions and enables both `dell-g15-daemon.service` and `dell-g15-tray.service`:
 ```bash
-git clone https://github.com/murilogiatti/dell-g15-power-sync.git
-cd dell-g15-power-sync
+./bin/g15-tray --print-backend
+./bin/g15-tray --check-dependencies
 ./install.sh
 ```
-To open the graphical Control Center at any time from the terminal or application launcher:
+
+O instalador verifica os componentes existentes antes de interromper serviços. Não instala pacotes, não usa privilégios administrativos, não modifica `/usr`, `/etc`, regras udev ou a imagem do sistema. Os arquivos da aplicação ficam em `~/.local/bin`, `$XDG_CONFIG_HOME/systemd/user` e `$XDG_DATA_HOME` (com os padrões `~/.config` e `~/.local/share`). Requer Python 3 e systemd de usuário existentes.
+
+**Kinoite, Silverblue e outras distribuições imutáveis:** utiliza exclusivamente o que já está disponível. Não utiliza layering, ambientes Python adicionais, runtimes baixados ou containers para suprir dependências. A presença de Qt ou GTK não garante a presença dos bindings Python. Se faltar a GUI, instale explicitamente somente o daemon:
+
+```bash
+./install.sh --daemon-only
+```
+
+Esse modo desativa o serviço gráfico anterior, preserva `config.json` e não instala atalhos gráficos. Se faltar Python ou acesso ao HID, o daemon também não poderá controlar o hardware. O instalador não concede permissões; as regras em `udev/` são apenas referência e não são aplicadas.
+
+### Capacidades e requisitos existentes
+
+| Função | Componentes/acesso necessários | Na ausência |
+|---|---|---|
+| Daemon RGB e brilho automático | Python 3, HID AW-ELC acessível, eventos Linux | Hardware indisponível; diagnóstico explícito |
+| Painel GNOME | PyGObject, GTK4, Libadwaita, sessão gráfica | Usar daemon/CLI sem GUI |
+| Painel KDE Plasma 6 | PyQt6 (Widgets, Network, Qml, Quick), QtQuick Controls/Layouts, Kirigami 6, sessão gráfica | Usar daemon/CLI sem GUI |
+| Integração de tema | Integração de plataforma/portal já presente | Aparência conforme os componentes disponíveis |
+| Atalhos Fn+F5/Fn+F9 | Leitura dos dispositivos evdev existentes | Atalhos físicos indisponíveis; comandos continuam disponíveis |
+| Perfis de energia | Serviço compatível com PowerProfiles e `powerprofilesctl` ou `busctl` existentes | Seleção de perfil desabilitada |
+| Sensores | Arquivos hwmon legíveis | `N/A`, não uma leitura falsa de zero |
+| Bandeja | Host StatusNotifier compatível | Painel pode ser aberto por `--show` |
+| Atualização | Rede HTTPS e diretórios de usuário graváveis | Versão instalada continua disponível |
+
+Não há instalação automática de serviços, extensões ou dependências. No GNOME sem host de bandeja, o ícone pode não aparecer. Não há promessa de paridade visual ou de suporte a todas as versões de Ubuntu/Fedora. O backend KDE requer componentes Qt6/Kirigami6; ambientes Plasma5 não satisfazem esse requisito.
+
+### Uso e diagnóstico
+
 ```bash
 ~/.local/bin/g15-tray --show
+~/.local/bin/g15-tray --diagnose
+~/.local/bin/g15-tray --backend qt --check-dependencies
+~/.local/bin/g15-tray --backend gtk --show
+~/.local/bin/g15-tray --headless --cycle-backlight
+~/.local/bin/g15-tray --headless --toggle-gmode
 ```
 
-### 🗑️ Uninstallation
+`G15_UI_BACKEND=gtk|qt` permite seleção explícita. Falta de toolkit não provoca troca silenciosa para o outro. A opção `--headless` não importa bibliotecas gráficas; modifica a configuração e solicita o perfil de energia quando aplicável. Alterações de LEDs exigem daemon ativo e acesso ao HID. `--diagnose` consulta permissões, sensores e disponibilidade do serviço de energia, sem escrever no hardware ou alterar perfis. A verificação gráfica usa subprocesso isolado, sem iniciar monitores evdev, daemon ou atualizador.
+
+### Comportamento implementado
+
+- Brilho da tela em cinco faixas: 0–20 → 10%, 21–40 → 30%, 41–60 → 50%, 61–80 → 75%, 81–100 → 100%, com histerese de ±2%. `bl_power != 0` apaga os LEDs; a detecção depende do driver/compositor.
+- Cor única ou quatro zonas, efeitos static, breathing, pulse, morph, spectrum e rainbow. O limite RGB padrão é 230 por canal.
+- O daemon bloqueia em eventos netlink/inotify quando ocioso. A GUI consulta telemetria a cada três segundos; não se promete CPU zero para toda a aplicação.
+- Zonas conhecidas dos IDs de plataforma `0C01`, `0E03`, `0E07`, `0E0A`; demais controladores usam a contagem reportada ou fallback. Isso não comprova todos os modelos G15.
+- Gravação de boot com resposta HID, estado pendente/em execução/concluído e identificação própria da solicitação. Prazo de 30 segundos; timeout significa ausência de confirmação no prazo, não prova de falha física. A resposta HID não equivale a leitura independente da EEPROM após reinicialização.
+- Modo G solicita performance e restaura o perfil anterior; falhas são reportadas. Isso não garante controle direto de ventoinhas ou equivalência ao Game Shift do firmware.
+- Atualizador baixa um único SHA completo, valida Python, prepara arquivos e substitui cada destino com recuperação de falhas. Não modifica o checkout Git. Instalações com alterações locais não publicadas não tentam atualizar pelo GitHub; reinstale após publicar o commit para habilitar atualizações remotas. Falhas de download, aplicação, recuperação, registro da versão e enfileiramento do reinício são diferenciadas. A recuperação em memória não resiste a SIGKILL/queda de energia como uma transação global. O reinício é enfileirado sem bloquear a própria GUI; conclusão pode ser consultada em `systemctl --user status`.
+
+### Validação e limites
+
 ```bash
-./uninstall.sh
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v
+bash -n install.sh uninstall.sh
 ```
 
----
+Os testes usam arquivos temporários e hardware/serviços simulados. Incluem normalização de JSON, rollback após substituição parcial, falha de recuperação, recriação real de watches no mesmo caminho, preservação de alterações durante gravação e seleção isolada dos toolkits. O teste Qt/QML é pulado explicitamente quando PyQt6 não existe. O CI possui uma etapa Qt dedicada; a configuração de CI não significa que tenha sido executada localmente.
 
-<h2 id="português">🇧🇷 Português (PT-BR)</h2>
+Integração visual em KDE real, Ubuntu/Fedora em suas diferentes edições, permissões nas imagens imutáveis e operações físicas HID/EEPROM precisam de validação em cada ambiente. Não se presume que bindings ou permissões estejam incluídos numa imagem de distribuição.
 
-### Visão Geral
-<img src="assets/logo.svg" alt="Dell G15 Logo" width="110" align="right"/>
+Desinstalação: `./uninstall.sh`. Remove arquivos de usuário e preserva a configuração e as regras do sistema.
 
-O **Dell G15 Ambient Sync & Control Center** une um daemon de hardware ultraleve orientado a eventos (`g15-daemon`) a um **Indicador na Barra de Notificações Superior + Painel de Controle GTK4/Libadwaita** (`g15-tray`).
+## English
 
-Construído do zero com arquitetura **Data-Oriented Design (DOD)**, ele elimina loops de polling (`sleep`) no daemon de hardware e dispensa ferramentas externas pesadas (`openrgb`):
-- **Comunicação USB HID Direta (Sem OpenRGB)**: Conversa diretamente com o controlador Alienware AW-ELC (`187c:0550` / `187c:0551`) via `/dev/hidraw*` (`ioctl HIDIOCSFEATURE`) usando apenas a biblioteca padrão do Python 3 no `g15-daemon`. Consulta a tabela de zonas do firmware (`0x20 0x02`) e mapeia IDs de plataforma AW-ELC conhecidos da linha Dell G15 (`5511`, `5515`, `5520`, `5525`, `5530`, `5535`).
-- **Daemon de Hardware Orientado a Eventos (`g15-daemon`)**: Escuta diretamente eventos `AF_NETLINK` (`NETLINK_KOBJECT_UEVENT`) e `inotify` do kernel Linux (bloqueado em `select` sem polling em repouso) e reage com **debounce de 150ms**.
-- **Widget na Barra de Notificações (`StatusNotifierItem` + `Dbusmenu`)**: Integração nativa com GNOME (AppIndicator) e KDE Plasma (requer `PyGObject`, `GTK 4.0` e `Libadwaita 1` do sistema, atualizando telemetria de sensores a cada 3 segundos):
-  - **Scroll do Mouse no Ícone**: Role a roda do mouse sobre o ícone do teclado no topo da tela para ajustar o brilho (`0%`, `10%`, `30%`, `50%`, `75%`, `100%`) instantaneamente.
-  - **Menu Rápido Completo**: Alterne entre *Brilho Automático (Ambient Sync)* e níveis fixos, ative o **Modo G / Game Shift (`Fn+F9`)**, escolha entre 12 presets de cores RGB, ative efeitos nativos de hardware, mude o perfil térmico/energia (`Economia`, `Equilibrado`, `Desempenho`) e acompanhe temperaturas `CPU`/`GPU` e rotação dos coolers (`RPM`).
-- **Teclas de Atalho Físicas (`Fn+F5` e `Fn+F9`) + Notificações OSD**:
-  - **`Fn+F9` (Modo G / Game Shift)**: Solicita o perfil `performance` via `power-profiles-daemon`, aplica **Vermelho Puro (`#FF0000`)** mantendo o brilho atual configurado (automático ou manual), restaura suas cores/efeito e perfil de energia anteriores ao desativar e exibe notificação nativa no GNOME / KDE Plasma.
-  - **`Fn+F5` (Ciclo Inteligente de Iluminação)**: Utiliza a tecla física de iluminação do teclado para alternar entre **`🔄 Brilho Automático (Ambient Sync)` ➔ `🔆 100% Fixo` ➔ `🔅 50% Fixo` ➔ `🌑 Desligado (0%)`** com notificações na tela.
-- **Painel de Controle GTK4 + Libadwaita (`g15-tray --show`)**:
-  - **Tema Claro e Escuro Automático**: Acompanha em tempo real o seletor de tema claro/escuro do GNOME/Ubuntu e do KDE Plasma via XDG Desktop Portal e GSettings.
-  - **Alternância Dinâmica (Teclado Inteiro ou 4 Zonas)**: Alterne entre um seletor único para todo o teclado ou 4 seletores independentes por região (`Zona 1 WASD`, `Zona 2 Centro-Esq`, `Zona 3 Centro-Dir`, `Zona 4 NumPad`), acompanhados de uma grade identificada com 12 cores pré-selecionadas (`Branco Puro`, `Azul Gelo`, `Ciano Alienware`, `Azul Cobalto`, `Turquesa`, `Verde Matrix`, `Ouro Solar`, `Âmbar Conforto`, `Laranja`, `Vermelho G15`, `Magenta`, `Roxo Neon`).
-  - **Efeitos Nativos de Hardware**: Acione animações executadas diretamente pelo chip AW-ELC do teclado (`Estático`, `Respiração`, `Pulso`, `Transição 2 Cores / Morph`, `Ciclo Spectrum`, `Ondas Arco-Íris / Rainbow`) com escala de velocidade calibrada (`10%–100%` e ajuste de ±5% pela roda do mouse).
-  - **Gravação na Memória Interna do Teclado (Boot)**: Salve sua cor e efeito favoritos no slot de usuário (`0x0061`) do microcontrolador com confirmação real de gravação HID pelo `g15-daemon`.
-  - **Atualizador Atômico Integrado em 1 Clique**: Verifica no GitHub (`main`) se há versões novas e baixa/valida todos os arquivos fixados no commit SHA alvo com reversão automática (rollback) antes de substituir os arquivos locais.
-- **Compatível com Distros Tradicionais e Imutáveis**: Funciona no **Ubuntu / Debian** e no **Fedora Workstation / Kinoite / Silverblue (Atomic)** usando os pacotes padrão do sistema (`python3`, `python3-gi`/`python3-gobject`, `gtk4`, `libadwaita`), sem pacotes `pip`.
+Linux control for Alienware AW-ELC `187c:0550` / `187c:0551`. The hardware daemon uses Python's standard library; GNOME uses GTK4/Libadwaita and KDE Plasma 6 uses PyQt6/QtQuick/Kirigami6, with isolated imports.
 
-### ✨ Sincronização Inteligente em 5 Níveis + Histerese (±2%)
-Quando o **Ambient Sync** está ativo, as cores RGB escolhidas têm seu brilho escalado proporcionalmente ao brilho da tela (`amdgpu_bl*`) com banda morta de ±2% para evitar oscilações:
-- 🌑 **Tela Desligada (`bl_power != 0`)** ➔ **0% Teclado** *(Dimmer de Hardware `0x26` em 100% — LEDs apagados quando o driver de backlight reporta desligamento)*
-- 🌙 **0–20% Tela** ➔ **10% Teclado** *(Piso mínimo seguro com a tela ligada)*
-- 🌘 **21–40% Tela** ➔ **30% Teclado**
-- 🌗 **41–60% Tela** ➔ **50% Teclado**
-- 🌔 **61–80% Tela** ➔ **75% Teclado**
-- 🌕 **81–100% Tela** ➔ **100% Teclado** *(Limitado por padrão ao pico `230` / `#E6E6E6` para proteger contra cortes do limitador de energia)*
+Installation is user-only and never installs dependencies or changes `/usr`, `/etc`, udev rules or the system image, on either traditional or immutable distributions. Run `./bin/g15-tray --check-dependencies` before `./install.sh`. If graphical components are absent, use `./install.sh --daemon-only`. Existing Python, user systemd and HID permissions are still required. No layering, downloaded runtimes or containers are used as dependency workarounds.
 
-### 🚀 Instalação e Atualização
-O instalador remove automaticamente quaisquer scripts ou serviços de versões antigas e ativa tanto o `dell-g15-daemon.service` quanto o `dell-g15-tray.service`:
-```bash
-git clone https://github.com/murilogiatti/dell-g15-power-sync.git
-cd dell-g15-power-sync
-./install.sh
-```
-Para abrir o Painel de Controle gráfico a qualquer momento pelo menu de aplicativos ou terminal:
-```bash
-~/.local/bin/g15-tray --show
-```
+Use `--show` for the panel, `--diagnose` for optional capabilities, `--print-backend` or `--backend gtk|qt` for explicit selection. `--headless --cycle-backlight` and `--headless --toggle-gmode` operate without importing either toolkit. Missing dependencies never trigger a silent toolkit switch.
 
-### 🗑️ Desinstalação
-```bash
-./uninstall.sh
-```
+Unavailable sensors show `N/A`; unavailable power-profile support disables its selector. Hotkeys require existing evdev read access. A tray host is optional for opening the panel. Theme integration depends on the platform plugins/portals already available. Qt6 does not imply the Python bindings are present; Plasma5 is outside the Qt6/Kirigami6 backend requirement.
+
+Updates pin all downloads to one commit, stage and validate payloads, and recover from partial replacement errors without changing the Git checkout. This is not a global crash-safe transaction. Boot writes use correlated pending/running/completed feedback and a 30-second deadline. A missing confirmation is reported as a timeout, not as proven hardware failure.
+
+Automated tests run using temporary user data and mocked hardware/services. The QML smoke test explicitly skips when PyQt6 is absent. Actual visual integration on KDE and GNOME, immutable images and physical HID/EEPROM behavior require testing on those systems; full distribution compatibility and feature parity are not claimed. See the Portuguese capability table and validation notes above.
