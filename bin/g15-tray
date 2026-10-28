@@ -512,10 +512,28 @@ class G15ControlApp(Adw.Application):
         self._updating_app = False
         self._notified_commit = ""
         self._gnome_settings = None
+        self._portal_sub_id = 0
 
     def _setup_theme_sync(self):
         style_mgr = Adw.StyleManager.get_default()
         style_mgr.set_color_scheme(Adw.ColorScheme.DEFAULT)
+
+        # 1. Subscribe to XDG Desktop Portal Settings (universal: GNOME, KDE Plasma, Cosmic, etc.)
+        try:
+            bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+            self._portal_sub_id = bus.signal_subscribe(
+                "org.freedesktop.portal.Desktop",
+                "org.freedesktop.portal.Settings",
+                "SettingChanged",
+                "/org/freedesktop/portal/desktop",
+                "org.freedesktop.appearance",
+                Gio.DBusSignalFlags.NONE,
+                self._on_portal_setting_changed,
+            )
+        except Exception:
+            pass
+
+        # 2. Also listen to GSettings (org.gnome.desktop.interface) for direct GNOME/Ubuntu/kde-gtk-config changes
         try:
             schema_src = Gio.SettingsSchemaSource.get_default()
             if schema_src and schema_src.lookup("org.gnome.desktop.interface", True):
@@ -526,26 +544,96 @@ class G15ControlApp(Adw.Application):
                 self._gnome_settings.connect(
                     "changed::gtk-theme", self._apply_system_color_scheme
                 )
-                self._apply_system_color_scheme()
         except Exception:
             pass
 
+        self._apply_system_color_scheme()
+
+    def _on_portal_setting_changed(self, _conn, _sender, _path, _iface, _sig, params):
+        try:
+            namespace, key, val = params.unpack()
+            if namespace == "org.freedesktop.appearance" and key == "color-scheme":
+                while isinstance(val, GLib.Variant):
+                    val = val.unpack()
+                style_mgr = Adw.StyleManager.get_default()
+                if val == 1:
+                    style_mgr.set_color_scheme(Adw.ColorScheme.FORCE_DARK)
+                elif val == 2:
+                    style_mgr.set_color_scheme(Adw.ColorScheme.FORCE_LIGHT)
+                else:
+                    self._apply_system_color_scheme()
+        except Exception:
+            pass
+
+    def _read_kde_dark_preference(self):
+        kdeglobals = os.path.join(
+            os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config")),
+            "kdeglobals",
+        )
+        try:
+            with open(kdeglobals, "r", encoding="utf-8", errors="ignore") as f:
+                for line in f:
+                    low = line.strip().lower()
+                    if low.startswith("colorscheme=") or low.startswith("lookandfeelpackage="):
+                        return "dark" in low
+        except OSError:
+            pass
+        return None
+
     def _apply_system_color_scheme(self, *_args):
         style_mgr = Adw.StyleManager.get_default()
-        if not self._gnome_settings:
-            style_mgr.set_color_scheme(Adw.ColorScheme.DEFAULT)
-            return
+
+        # Priority 1: XDG Desktop Portal (works identically on GNOME, Ubuntu, and KDE Plasma)
         try:
-            cs = self._gnome_settings.get_string("color-scheme").lower()
-            gtk_theme = self._gnome_settings.get_string("gtk-theme").lower()
-            if cs == "prefer-dark" or (cs == "default" and "dark" in gtk_theme):
+            bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+            res = bus.call_sync(
+                "org.freedesktop.portal.Desktop",
+                "/org/freedesktop/portal/desktop",
+                "org.freedesktop.portal.Settings",
+                "Read",
+                GLib.Variant("(ss)", ("org.freedesktop.appearance", "color-scheme")),
+                GLib.VariantType("(v)"),
+                Gio.DBusCallFlags.NONE,
+                500,
+                None,
+            )
+            val = res.unpack()[0]
+            while isinstance(val, GLib.Variant):
+                val = val.unpack()
+            if val == 1:
                 style_mgr.set_color_scheme(Adw.ColorScheme.FORCE_DARK)
-            elif cs == "prefer-light" or cs == "default":
+                return
+            if val == 2:
                 style_mgr.set_color_scheme(Adw.ColorScheme.FORCE_LIGHT)
-            else:
-                style_mgr.set_color_scheme(Adw.ColorScheme.DEFAULT)
+                return
         except Exception:
-            style_mgr.set_color_scheme(Adw.ColorScheme.DEFAULT)
+            pass
+
+        # Priority 2: Desktop-specific fallback (KDE Plasma vs GNOME/Ubuntu)
+        desktop = os.environ.get("XDG_CURRENT_DESKTOP", "").lower()
+        if "kde" in desktop or "plasma" in desktop:
+            kde_dark = self._read_kde_dark_preference()
+            if kde_dark is not None:
+                style_mgr.set_color_scheme(
+                    Adw.ColorScheme.FORCE_DARK if kde_dark else Adw.ColorScheme.FORCE_LIGHT
+                )
+                return
+
+        if self._gnome_settings:
+            try:
+                cs = self._gnome_settings.get_string("color-scheme").lower()
+                gtk_theme = self._gnome_settings.get_string("gtk-theme").lower()
+                if cs == "prefer-dark" or (cs == "default" and "dark" in gtk_theme):
+                    style_mgr.set_color_scheme(Adw.ColorScheme.FORCE_DARK)
+                elif cs == "prefer-light" or cs == "default":
+                    style_mgr.set_color_scheme(Adw.ColorScheme.FORCE_LIGHT)
+                else:
+                    style_mgr.set_color_scheme(Adw.ColorScheme.DEFAULT)
+                return
+            except Exception:
+                pass
+
+        style_mgr.set_color_scheme(Adw.ColorScheme.DEFAULT)
 
     def do_startup(self):
         Adw.Application.do_startup(self)
