@@ -71,10 +71,13 @@ mkdir -p "$HOME/.local/share/icons/hicolor/scalable/apps"
 mkdir -p "$HOME/.local/share/icons/hicolor/256x256/apps"
 mkdir -p "$HOME/.local/share/icons/hicolor/scalable/status"
 mkdir -p "$HOME/.local/share/icons/hicolor/64x64/status"
+cp "$SCRIPT_DIR/assets/logo.svg" "$HOME/.local/share/icons/hicolor/scalable/apps/io.github.murilogiatti.DellG15Control.svg"
+cp "$SCRIPT_DIR/assets/logo.png" "$HOME/.local/share/icons/hicolor/256x256/apps/io.github.murilogiatti.DellG15Control.png"
 cp "$SCRIPT_DIR/assets/logo.svg" "$HOME/.local/share/icons/hicolor/scalable/apps/dell-g15-control.svg"
 cp "$SCRIPT_DIR/assets/logo.png" "$HOME/.local/share/icons/hicolor/256x256/apps/dell-g15-control.png"
 cp "$SCRIPT_DIR/assets/tray-icon.svg" "$HOME/.local/share/icons/hicolor/scalable/status/tray-icon.svg"
 cp "$SCRIPT_DIR/assets/tray-icon.png" "$HOME/.local/share/icons/hicolor/64x64/status/tray-icon.png"
+gtk-update-icon-cache -f -t "$HOME/.local/share/icons/hicolor" 2>/dev/null || true
 echo "$MSG_SCRIPTS"
 
 # 4. Install Systemd User Services & Desktop Launcher
@@ -83,18 +86,21 @@ cp "$SCRIPT_DIR/systemd/dell-g15-daemon.service" "$HOME/.config/systemd/user/del
 cp "$SCRIPT_DIR/systemd/dell-g15-tray.service" "$HOME/.config/systemd/user/dell-g15-tray.service"
 
 mkdir -p "$HOME/.local/share/applications"
-cat > "$HOME/.local/share/applications/dell-g15-control.desktop" <<EOF
+rm -f "$HOME/.local/share/applications/dell-g15-control.desktop"
+cat > "$HOME/.local/share/applications/io.github.murilogiatti.DellG15Control.desktop" <<EOF
 [Desktop Entry]
 Name=Dell G15 Control Center
 Comment=Configure Dell G15 4-Zone RGB, Ambient Sync, Effects and Power Profiles
 Comment[pt]=Configurar Zonas RGB, Brilho Automático, Efeitos e Energia do Dell G15
 Exec=$HOME/.local/bin/g15-tray --show
-Icon=$HOME/.local/share/icons/hicolor/scalable/apps/dell-g15-control.svg
+Icon=$HOME/.local/share/icons/hicolor/scalable/apps/io.github.murilogiatti.DellG15Control.svg
+StartupWMClass=io.github.murilogiatti.DellG15Control
 Terminal=false
 Type=Application
 Categories=Settings;HardwareSettings;GTK;
 Keywords=Dell;G15;Alienware;RGB;Keyboard;Backlight;
 EOF
+update-desktop-database "$HOME/.local/share/applications" 2>/dev/null || true
 echo "$MSG_SERVICE"
 
 # 5. Udev Rules (Works on both standard Linux and immutable Fedora Kinoite /etc)

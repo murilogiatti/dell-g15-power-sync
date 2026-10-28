@@ -52,6 +52,20 @@ UPDATE_FILES_MAP = (
     ("assets/tray-icon.png", os.path.join(DATA_DIR, "tray-icon.png"), 0o644),
     (
         "assets/logo.svg",
+        os.path.expanduser(
+            "~/.local/share/icons/hicolor/scalable/apps/io.github.murilogiatti.DellG15Control.svg"
+        ),
+        0o644,
+    ),
+    (
+        "assets/logo.png",
+        os.path.expanduser(
+            "~/.local/share/icons/hicolor/256x256/apps/io.github.murilogiatti.DellG15Control.png"
+        ),
+        0o644,
+    ),
+    (
+        "assets/logo.svg",
         os.path.expanduser("~/.local/share/icons/hicolor/scalable/apps/dell-g15-control.svg"),
         0o644,
     ),
@@ -500,6 +514,7 @@ class G15ControlApp(Adw.Application):
 
     def do_startup(self):
         Adw.Application.do_startup(self)
+        Gtk.Window.set_default_icon_name("io.github.murilogiatti.DellG15Control")
         style_mgr = Adw.StyleManager.get_default()
         style_mgr.set_color_scheme(Adw.ColorScheme.PREFER_DARK)
         display = Gdk.Display.get_default()
@@ -1680,7 +1695,7 @@ class G15ControlApp(Adw.Application):
     def _build_control_window(self):
         self.window = Adw.ApplicationWindow(application=self)
         self.window.set_title("Dell G15 Control Center")
-        self.window.set_icon_name("dell-g15-control")
+        self.window.set_icon_name("io.github.murilogiatti.DellG15Control")
         self.window.set_default_size(680, 760)
         self.window.connect("close-request", self._on_window_close_request)
 
@@ -2206,8 +2221,17 @@ class G15ControlApp(Adw.Application):
 def main():
     signal.signal(signal.SIGINT, signal.SIG_DFL)
     signal.signal(signal.SIGTERM, lambda *_a: sys.exit(0))
+    GLib.set_prgname("io.github.murilogiatti.DellG15Control")
+    GLib.set_application_name("Dell G15 Control Center")
     start_hidden = not any(
-        flag in sys.argv for flag in ("--show", "--toggle-gmode", "--cycle-backlight")
+        flag in sys.argv
+        for flag in (
+            "--show",
+            "--toggle-gmode",
+            "--cycle-backlight",
+            "--check-update",
+            "--self-update",
+        )
     )
     app = G15ControlApp(start_hidden=start_hidden)
     return app.run(sys.argv)

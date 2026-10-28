@@ -46,10 +46,13 @@ rm -f "$HOME/.local/bin/g15-daemon.sh"
 rm -f "$HOME/.local/bin/g15-cycle.sh"
 rm -f "$HOME/.local/bin/g15-update.sh"
 rm -rf "$HOME/.local/share/dell-g15"
+rm -f "$HOME/.local/share/icons/hicolor/scalable/apps/io.github.murilogiatti.DellG15Control.svg"
+rm -f "$HOME/.local/share/icons/hicolor/256x256/apps/io.github.murilogiatti.DellG15Control.png"
 rm -f "$HOME/.local/share/icons/hicolor/scalable/apps/dell-g15-control.svg"
 rm -f "$HOME/.local/share/icons/hicolor/256x256/apps/dell-g15-control.png"
 rm -f "$HOME/.local/share/icons/hicolor/scalable/status/tray-icon.svg"
 rm -f "$HOME/.local/share/icons/hicolor/64x64/status/tray-icon.png"
+rm -f "$HOME/.local/share/applications/io.github.murilogiatti.DellG15Control.desktop"
 rm -f "$HOME/.local/share/applications/dell-g15-control.desktop"
 
 if [ -f "/etc/udev/rules.d/10-alienware.rules" ]; then
